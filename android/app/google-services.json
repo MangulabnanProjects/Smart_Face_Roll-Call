@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "911226358765",
+    "project_id": "audioanalysisdb",
+    "storage_bucket": "audioanalysisdb.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:911226358765:android:8792f53d09dafea39275e4",
+        "android_client_info": {
+          "package_name": "com.attendance.attendance_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAz9n-GY50wDQIPXFgDNh2svFAQg8-v9zY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
