@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'shared/screens/login_screen.dart';
 import 'mobile/screens/main_screen.dart';
 import 'mobile/screens/camera_screen.dart';
@@ -21,9 +22,7 @@ void main() async {
     );
     debugPrint('✅ Firebase initialized successfully');
   } catch (e) {
-    // Firebase failed - app will run without it
     debugPrint('⚠️ Firebase initialization failed: $e');
-    debugPrint('App will continue without Firebase features');
   }
   
   runApp(const MyApp());
@@ -41,16 +40,43 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
         useMaterial3: true,
       ),
-      // Use home instead of initialRoute handles the default '/' path better on web
-      home: kIsWeb ? const LoginScreen() : const MobileStudentLoginScreen(),
+      home: const AuthWrapper(),
       routes: {
-        '/login': (context) => const LoginScreen(), // Web instructor login
-        '/student-login': (context) => const MobileStudentLoginScreen(), // Mobile student login
-        '/student-signup': (context) => const MobileStudentSignupScreen(), // Mobile student signup
+        '/login': (context) => const LoginScreen(), 
+        '/student-login': (context) => const MobileStudentLoginScreen(),
+        '/student-signup': (context) => const MobileStudentSignupScreen(),
         '/home': (context) => kIsWeb ? const WebDashboardScreen() : const MobileMainScreen(),
         '/camera': (context) => const CameraScreen(),
         '/gallery': (context) => const GalleryScreen(),
         '/dashboard': (context) => const WebDashboardScreen(),
+      },
+    );
+  }
+}
+
+/// Handles persistent login state
+class AuthWrapper extends StatelessWidget {
+  const AuthWrapper({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<User?>(
+      stream: FirebaseAuth.instance.authStateChanges(),
+      builder: (context, snapshot) {
+        // 1. Loading state
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        // 2. User logged in
+        if (snapshot.hasData) {
+          return kIsWeb ? const WebDashboardScreen() : const MobileMainScreen();
+        }
+
+        // 3. User logged out
+        return kIsWeb ? const LoginScreen() : const MobileStudentLoginScreen();
       },
     );
   }

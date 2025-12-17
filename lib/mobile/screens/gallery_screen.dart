@@ -3,6 +3,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:io';
+import '../../shared/services/image_service.dart';
 
 /// Enhanced gallery with date filtering and user-specific images
 class GalleryScreen extends StatefulWidget {
@@ -23,6 +24,20 @@ class _GalleryScreenState extends State<GalleryScreen> {
   void initState() {
     super.initState();
     _loadImages();
+    // Listen for global image updates
+    ImageService().onImageSaved.addListener(_handleImageSaved);
+  }
+
+  @override
+  void dispose() {
+    ImageService().onImageSaved.removeListener(_handleImageSaved);
+    super.dispose();
+  }
+
+  void _handleImageSaved() {
+    if (mounted) {
+      _loadImages();
+    }
   }
 
   @override
@@ -56,7 +71,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
       if (await imagesPath.exists()) {
         final files = imagesPath
             .listSync()
-            .where((item) => item.path.endsWith('.jpg'))
+            .where((item) => item.path.endsWith('.jpg') && !item.path.contains('_labeled'))
             .toList();
         
         files.sort((a, b) => b.statSync().modified.compareTo(a.statSync().modified));
@@ -196,45 +211,144 @@ class _GalleryScreenState extends State<GalleryScreen> {
     );
   }
 
-  void _showImage(FileSystemEntity file) {
+  void _showImage(FileSystemEntity file) async {
+    // 1. Check for labeled version
+    final path = file.path;
+    final dir = file.parent;
+    final fileName = path.split(Platform.pathSeparator).last;
+    final extension = fileName.split('.').last;
+    final labeledName = fileName.replaceAll('.$extension', '_labeled.$extension');
+    final labeledFile = File('${dir.path}/$labeledName');
+    
+    bool hasLabeled = await labeledFile.exists();
+
     final modified = file.statSync().modified;
     final formattedDate = DateFormat('EEEE, MMM d, y \'at\' HH:mm:ss').format(modified);
     
+    if (!mounted) return;
+
     showDialog(
       context: context,
       builder: (context) => Dialog(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Image.file(File(file.path)),
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  Text(formattedDate, style: const TextStyle(fontSize: 14)),
-                  const SizedBox(height: 16),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      TextButton.icon(
-                        onPressed: () async {
-                          Navigator.pop(context);
-                          await file.delete();
-                          _loadImages();
-                        },
-                        icon: const Icon(Icons.delete, color: Colors.red),
-                        label: const Text('Delete', style: TextStyle(color: Colors.red)),
-                      ),
-                      TextButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text('Close'),
-                      ),
-                    ],
-                  ),
-                ],
+        insetPadding: const EdgeInsets.all(16),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Padding(
+                padding: EdgeInsets.all(16.0),
+                child: Text("Detection Details", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
               ),
-            ),
-          ],
+              
+              if (hasLabeled) ...[
+                 const Padding(
+                   padding: EdgeInsets.only(bottom: 8.0),
+                   child: Text("Labeled (AI)", style: TextStyle(color: Colors.blue, fontWeight: FontWeight.bold)),
+                 ),
+                 Image.file(labeledFile),
+                 const SizedBox(height: 16),
+                 const Divider(),
+                 const SizedBox(height: 16),
+              ],
+              
+              const Padding(
+                 padding: EdgeInsets.only(bottom: 8.0),
+                 child: Text("Original", style: TextStyle(fontWeight: FontWeight.bold)),
+              ),
+              Image.file(File(file.path)),
+              
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    Text(formattedDate, style: const TextStyle(fontSize: 14, color: Colors.grey)),
+                    const SizedBox(height: 16),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                      children: [
+                        TextButton.icon(
+                          onPressed: () async {
+                            // Confirm deletion
+                            final confirm = await showDialog<bool>(
+                              context: context,
+                              builder: (ctx) => AlertDialog(
+                                title: const Text('Delete Image?'),
+                                content: const Text(
+                                  'This will delete the image (and its labeled version) from the app and your phone gallery. This cannot be undone.',
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () => Navigator.pop(ctx, false),
+                                    child: const Text('Cancel'),
+                                  ),
+                                  TextButton(
+                                    onPressed: () => Navigator.pop(ctx, true),
+                                    style: TextButton.styleFrom(foregroundColor: Colors.red),
+                                    child: const Text('Delete'),
+                                  ),
+                                ],
+                              ),
+                            );
+
+                            if (confirm == true) {
+                              try {
+                                final directory = await getApplicationDocumentsDirectory();
+                                
+                                // Paths
+                                final sharedPath = '${directory.path}/images/shared/$fileName';
+                                final sharedLabeledPath = '${directory.path}/images/shared/$labeledName';
+                                final dcimPath = '/storage/emulated/0/DCIM/SmartAttendance/$fileName';
+
+                                // 2. Delete from User Gallery (Private)
+                                await file.delete();
+                                if (await labeledFile.exists()) {
+                                  await labeledFile.delete();
+                                }
+
+                                // 3. Delete from Shared/Recents (Global)
+                                final sharedFile = File(sharedPath);
+                                if (await sharedFile.exists()) await sharedFile.delete();
+                                
+                                final sharedLabeled = File(sharedLabeledPath);
+                                if (await sharedLabeled.exists()) await sharedLabeled.delete();
+
+                                // 4. Delete from Phone Gallery (DCIM)
+                                final dcimFile = File(dcimPath);
+                                if (await dcimFile.exists()) await dcimFile.delete();
+
+                                // 5. Notify Global Listeners
+                                ImageService().notifyImageSaved();
+
+                                if (context.mounted) {
+                                  Navigator.pop(context); // Close Image Dialog
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(content: Text('Images deleted')),
+                                  );
+                                }
+                              } catch (e) {
+                                debugPrint('Error deleting: $e');
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text('Error deleting: $e')),
+                                  );
+                                }
+                              }
+                            }
+                          },
+                          icon: const Icon(Icons.delete, color: Colors.red),
+                          label: const Text('Delete', style: TextStyle(color: Colors.red)),
+                        ),
+                        TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Close'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

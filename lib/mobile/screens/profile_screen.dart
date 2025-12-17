@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../../shared/services/api_service.dart';
 
 /// Profile/Settings screen
 class ProfileScreen extends StatefulWidget {
@@ -134,10 +135,51 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
           
           const Divider(),
-
+          
           // Menu items
           _buildMenuItem(Icons.photo_library, 'My Photos', '0 images', () {}),
-          _buildMenuItem(Icons.cloud_upload, 'Cloud Sync', 'Off (No billing)', () {}),
+          _buildMenuItem(Icons.cloud_upload, 'Server Settings', 'Configure IP', () async {
+             final currentUrl = await ApiService.getBaseUrl();
+             final controller = TextEditingController(text: currentUrl);
+             if (mounted) {
+               showDialog(
+                 context: context,
+                 builder: (context) => AlertDialog(
+                   title: const Text('Server Connection'),
+                   content: Column(
+                     mainAxisSize: MainAxisSize.min,
+                     children: [
+                       const Text('Enter the IP address of your Python server (e.g. 192.168.1.5:5000). Use 10.0.2.2:5000 for Emulator.'),
+                       const SizedBox(height: 10),
+                       TextField(
+                         controller: controller,
+                         decoration: const InputDecoration(
+                           hintText: 'e.g. http://192.168.1.5:5000',
+                           border: OutlineInputBorder(),
+                         ),
+                       ),
+                     ],
+                   ),
+                   actions: [
+                     TextButton(
+                       onPressed: () => Navigator.pop(context),
+                       child: const Text('Cancel'),
+                     ),
+                     TextButton(
+                       onPressed: () async {
+                         await ApiService.setBaseUrl(controller.text);
+                         Navigator.pop(context);
+                         ScaffoldMessenger.of(context).showSnackBar(
+                           const SnackBar(content: Text('Server URL updated')),
+                         );
+                       },
+                       child: const Text('Save'),
+                     ),
+                   ],
+                 ),
+               );
+             }
+          }),
           _buildMenuItem(Icons.face, 'AI Model Status', 'Ready for integration', () {}),
           _buildMenuItem(Icons.info_outline, 'About', 'Version 1.0.0', () {}),
           
