@@ -17,6 +17,7 @@ import '../../shared/services/attendance_service.dart';
 import '../../shared/models/attendance.dart';
 import 'attendance_screen.dart';
 import '../widgets/today_classes_dialog.dart';
+import 'detection_analysis_screen.dart';
 
 /// Redesigned Home Screen with attendance analytics and image gallery
 class MobileHomeScreen extends StatefulWidget {
@@ -255,6 +256,19 @@ class _MobileHomeScreenState extends State<MobileHomeScreen> with WidgetsBinding
         return;
       }
 
+      // --- SHOW DETECTION ANALYSIS SCREEN ---
+      if (mounted) {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => DetectionAnalysisScreen(
+              detectionResult: result,
+              originalImage: file,
+            ),
+          ),
+        );
+      }
+
       // --- PREPARE FILE INFO ---
       final directory = await getApplicationDocumentsDirectory();
       final timestamp = DateTime.now().millisecondsSinceEpoch;
@@ -277,7 +291,8 @@ class _MobileHomeScreenState extends State<MobileHomeScreen> with WidgetsBinding
 
           // CHECK CLASS SCHEDULE
           if (classId.isNotEmpty) {
-            final isAllowed = ScheduleService.isCameraAllowed(classId);
+            final scheduleService = ScheduleService();
+            final isAllowed = await scheduleService.isCameraAllowedForClass(classId);
             if (!isAllowed) {
               if (mounted) {
                 showDialog(

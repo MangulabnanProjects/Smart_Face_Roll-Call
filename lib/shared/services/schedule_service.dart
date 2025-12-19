@@ -6,6 +6,145 @@ class ScheduleService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final String _collection = 'Schedules';
 
+  /// Get current active schedule for a class
+  /// Returns schedule info if currently in class time, null otherwise
+  Future<Map<String, String?>> getCurrentScheduleForClass(String classId) async {
+    try {
+      final now = DateTime.now();
+      final currentDay = now.weekday - 1; // Mon=0
+      final currentMinutes = now.hour * 60 + now.minute;
+
+      final scheduleQuery = await _firestore
+          .collection(_collection)
+          .where('classId', isEqualTo: classId)
+          .where('dayIndex', isEqualTo: currentDay)
+          .get();
+
+      for (var doc in scheduleQuery.docs) {
+        final data = doc.data();
+        final startHour = data['startHour'] as int? ?? 0;
+        final startMinute = data['startMinute'] as int? ?? 0;
+        final endHour = data['endHour'] as int? ?? 0;
+        final endMinute = data['endMinute'] as int? ?? 0;
+
+        final startMinutes = startHour * 60 + startMinute;
+        final endMinutes = endHour * 60 + endMinute;
+
+        if (currentMinutes >= startMinutes && currentMinutes <= endMinutes) {
+          return {
+            'scheduleId': doc.id,
+            'scheduleTitle': data['title'] as String? ?? '',
+            'instructorId': data['instructorId'] as String? ?? '',
+            'instructorName': data['instructorName'] as String? ?? '',
+            'className': data['className'] as String?,
+            'classId': data['classId'] as String? ?? '',
+          };
+        }
+      }
+
+      return {
+        'scheduleId': null,
+        'scheduleTitle': null,
+        'instructorId': null,
+        'instructorName': null,
+        'className': null,
+        'classId': null,
+      };
+    } catch (e) {
+      debugPrint('Error getting current schedule: $e');
+      return {
+        'scheduleId': null,
+        'scheduleTitle': null,
+        'instructorId': null,
+        'instructorName': null,
+        'className': null,
+        'classId': null,
+      };
+    }
+  }
+
+  /// Check if camera/import is currently allowed for a class
+  Future<bool> isCameraAllowedForClass(String classId) async {
+    final schedule = await getCurrentScheduleForClass(classId);
+    return schedule['scheduleId'] != null;
+  }
+
+  /// Get restriction message with next class time
+  Future<String> getRestrictionMessageForClass(String classId) async {
+    if (await isCameraAllowedForClass(classId)) {
+      return "";
+    }
+
+    // Get next schedule
+    final now = DateTime.now();
+    final schedules = await getSchedulesForClass(classId);
+
+    if (schedules.isEmpty) {
+      return "No class schedule found. Please contact your instructor.";
+    }
+
+    // Find next upcoming class
+    ClassSession? nextClass;
+    int? daysUntil;
+
+    for (int dayOffset = 0; dayOffset < 7; dayOffset++) {
+      final checkDate = now.add(Duration(days: dayOffset));
+      final dayIndex = checkDate.weekday - 1;
+
+      for (final schedule in schedules) {
+        if (schedule.dayIndex == dayIndex) {
+          final classStart = DateTime(
+            checkDate.year,
+            checkDate.month,
+            checkDate.day,
+            schedule.startTime.hour,
+            schedule.startTime.minute,
+          );
+
+          if (classStart.isAfter(now)) {
+            nextClass = schedule;
+            daysUntil = dayOffset;
+            break;
+          }
+        }
+      }
+      if (nextClass != null) break;
+    }
+
+    if (nextClass == null) {
+      return "Camera only available during class hours.";
+    }
+
+    final days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    final dayName = days[nextClass.dayIndex];
+    final timeStr = '${nextClass.startTime.hour.toString().padLeft(2, '0')}:${nextClass.startTime.minute.toString().padLeft(2, '0')}';
+
+    if (daysUntil == 0) {
+      return "Camera available today at $timeStr";
+    } else if (daysUntil == 1) {
+      return "Camera available tomorrow ($dayName) at $timeStr";
+    } else {
+      return "Camera available on $dayName at $timeStr";
+    }
+  }
+
+  /// Get all schedules for a class
+  Future<List<ClassSession>> getSchedulesForClass(String classId) async {
+    try {
+      final query = await _firestore
+          .collection(_collection)
+          .where('classId', isEqualTo: classId)
+          .get();
+
+      return query.docs
+          .map((doc) => ClassSession.fromMap(doc.data(), doc.id))
+          .toList();
+    } catch (e) {
+      debugPrint('Error fetching class schedules: $e');
+      return [];
+    }
+  }
+
   /// 1. Get Stream of schedules for a specific instructor
   Stream<List<ClassSession>> getSchedulesStream(String instructorId) {
     return _firestore
@@ -35,7 +174,6 @@ class ScheduleService {
   }
 
   /// 5. Check for Room Conflicts
-  /// Returns null if no conflict, or a Map/Object with conflict details if one exists
   Future<Map<String, dynamic>?> checkRoomConflict({
     required String room,
     required int dayIndex,
@@ -45,11 +183,9 @@ class ScheduleService {
     required int endMinute,
     String? excludeScheduleId,
   }) async {
-    // We have to query broadly because Firestore filtering on multiple inequality fields is limited.
-    // Query schedules for that Room and Day
     final query = await _firestore
         .collection(_collection)
-        .where('subtitle', isEqualTo: room) // 'subtitle' stores the Room Number
+        .where('subtitle', isEqualTo: room)
         .where('dayIndex', isEqualTo: dayIndex)
         .get();
 
@@ -68,7 +204,6 @@ class ScheduleService {
       final existingStartTotal = existingStartHour * 60 + existingStartMin;
       final existingEndTotal = existingEndHour * 60 + existingEndMin;
 
-      // Overlap logic: (StartA < EndB) and (EndA > StartB)
       if (newStartMins < existingEndTotal && newEndMins > existingStartTotal) {
          return {
            'room': room,
@@ -84,8 +219,6 @@ class ScheduleService {
   }
 
   /// 6. Check for Class Conflicts
-  /// Prevents the same class from being scheduled at the same time by different instructors
-  /// Returns null if no conflict, or a Map with conflict details if one exists
   Future<Map<String, dynamic>?> checkClassConflict({
     required String classId,
     required int dayIndex,
@@ -95,10 +228,8 @@ class ScheduleService {
     required int endMinute,
     String? excludeScheduleId,
   }) async {
-    // If no class is selected, skip this check
     if (classId.isEmpty) return null;
 
-    // Query schedules for that Class and Day
     final query = await _firestore
         .collection(_collection)
         .where('classId', isEqualTo: classId)
@@ -120,7 +251,6 @@ class ScheduleService {
       final existingStartTotal = existingStartHour * 60 + existingStartMin;
       final existingEndTotal = existingEndHour * 60 + existingEndMin;
 
-      // Overlap logic: (StartA < EndB) and (EndA > StartB)
       if (newStartMins < existingEndTotal && newEndMins > existingStartTotal) {
          return {
            'classId': classId,
@@ -137,75 +267,9 @@ class ScheduleService {
     return null;
   }
 
-  // --- STUDENT CAMERA RESTRICTION LOGIC (Mock/Placeholder) ---
-  
-  // Mock Schedule Data (Temporary)
-  static final Map<String, List<Map<String, dynamic>>> _mockSchedules = {
-    'BSCS-4A': [
-      {'day': 1, 'start': '14:00', 'end': '17:00'}, // Monday 2PM - 5PM
-      {'day': 3, 'start': '14:00', 'end': '17:00'}, // Wednesday 2PM - 5PM
-    ],
-    'BSCS-3B': [
-      {'day': 2, 'start': '08:00', 'end': '11:00'}, // Tuesday 8AM - 11AM
-    ],
-  };
-
-  /// Checks if the current time matches the student's class schedule
-  /// This is currently static as requested, separate from the Firestore logic
-  static bool isCameraAllowed(String section) {
-    // 1. Get current time
-    final now = DateTime.now();
-    final currentDay = now.weekday - 1; // Dart Mon=1..7, but App uses Mon=0..6 match check!
-    // WAIT: _days in manage_screen is 0-based index [Mon, Tue...]. 
-    // Dart DateTime.weekday is Mon=1, Sun=7.
-    // So for Mon(1), index is 0.
-    final dayIndex = now.weekday - 1; 
-    
-    // 2. Get schedule for the section
-    final schedules = _mockSchedules[section];
-    if (schedules == null) {
-      return true; // Default to allow if no schedule defined
-    }
-
-    // 3. Check if today is a class day
-    for (final classTime in schedules) {
-      // Mock data uses 1=Mon? Let's assume Mock Data follows Dart standard (1=Mon) to be safe or adjust.
-      // Let's standardize: Mock data keys 'day' are 1=Mon.
-      if (classTime['day'] == now.weekday) {
-        // 4. Check time window
-        final startTime = _parseTime(classTime['start'], now);
-        final endTime = _parseTime(classTime['end'], now);
-
-        if (now.isAfter(startTime) && now.isBefore(endTime)) {
-          return true; // Within class hours
-        }
-      }
-    }
-
-    return false;
-  }
-
-  static DateTime _parseTime(String timeStr, DateTime now) {
-    final parts = timeStr.split(':');
-    final hour = int.parse(parts[0]);
-    final minute = int.parse(parts[1]);
-    return DateTime(now.year, now.month, now.day, hour, minute);
-  }
-
-  static String getRestrictionMessage(String section) {
-    if (isCameraAllowed(section)) return "";
-    return "Attendance is only allowed during your scheduled class hours.";
-  }
-
   /// 7. Get Schedules for a Class on a Specific Date
-  /// Returns list of schedules for the given class that occur on the given date's weekday
   Future<List<ClassSession>> getSchedulesForClassDate(String classId, DateTime date) async {
     try {
-      // Dart DateTime.weekday: Mon=1, Sun=7
-      // Our App Logic: Usually 0-based index [Mon, Tue...] depending on how saved.
-      // Let's check how checkRoomConflict uses it: 'dayIndex'
-      // In manage_screen: _days = ['Mon', 'Tue'...] -> dayIndex 0 = Mon.
-      // So we convert DateTime.weekday (1=Mon) to 0-based (0=Mon).
       final dayIndex = date.weekday - 1;
 
       final query = await _firestore

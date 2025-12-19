@@ -15,6 +15,7 @@ import 'gallery_screen.dart';
 import 'home_screen.dart';
 import 'profile_screen.dart';
 import 'schedule_screen.dart';
+import 'detection_analysis_screen.dart';
 
 /// Main mobile app with bottom navigation
 class MobileMainScreen extends StatefulWidget {
@@ -55,6 +56,54 @@ class _MobileMainScreenState extends State<MobileMainScreen> {
         );
       }
       return;
+    }
+
+    // CHECK SCHEDULE FIRST
+    try {
+      final studentDoc = await FirebaseFirestore.instance
+          .collection('Students')
+          .doc(user.uid)
+          .get();
+      
+      final classId = studentDoc.data()?['classId'] as String? ?? '';
+      
+      if (classId.isNotEmpty) {
+        final scheduleService = ScheduleService();
+        final isAllowed = await scheduleService.isCameraAllowedForClass(classId);
+        
+        if (!isAllowed) {
+          final message = await scheduleService.getRestrictionMessageForClass(classId);
+          if (mounted) {
+            showDialog(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                title: const Text('Outside Class Hours'),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.schedule, size: 48, color: Colors.orange),
+                    const SizedBox(height: 16),
+                    Text(
+                      message,
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: const Text('OK'),
+                  ),
+                ],
+              ),
+            );
+          }
+          return; // STOP - don't open camera
+        }
+      }
+    } catch (e) {
+      debugPrint('Error checking schedule: $e');
+      // Continue anyway if schedule check fails
     }
 
     // 1. Check local cache first (Fastest)
@@ -230,7 +279,8 @@ class _MobileMainScreenState extends State<MobileMainScreen> {
 
       // CHECK CLASS SCHEDULE (Time Restriction)
       if (classId.isNotEmpty) {
-        final isAllowed = ScheduleService.isCameraAllowed(classId);
+        final scheduleService = ScheduleService();
+        final isAllowed = await scheduleService.isCameraAllowedForClass(classId);
         if (!isAllowed) {
           if (mounted) {
             showDialog(
@@ -249,7 +299,7 @@ class _MobileMainScreenState extends State<MobileMainScreen> {
               ),
             );
           }
-          return; // REJECT PHOTO
+          return; // Stop processing
         }
       }
 
@@ -287,7 +337,7 @@ class _MobileMainScreenState extends State<MobileMainScreen> {
       }
 
       if (mounted) Navigator.pop(context); // Dismiss processing ID
-
+      
       final bool isDetected = result['detected'] == true;
       
       if (!isDetected) {
@@ -302,6 +352,19 @@ class _MobileMainScreenState extends State<MobileMainScreen> {
            );
          }
          return; // STOP SAVING
+      }
+
+      // --- SHOW DETECTION ANALYSIS SCREEN ---
+      if (mounted) {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => DetectionAnalysisScreen(
+              detectionResult: result,
+              originalImage: sourceFile,
+            ),
+          ),
+        );
       }
 
       // --- IF DETECTED, RECORD ATTENDANCE FOR ALL STUDENTS ---
@@ -567,72 +630,10 @@ class _MobileMainScreenState extends State<MobileMainScreen> {
     );
   }
 
+
   /// Get current schedule information for attendance recording
-  /// GLOBAL LOOKUP - finds schedules based on TIME, not student's profile classId
   Future<Map<String, String?>> _getCurrentScheduleInfo(String classId) async {
-    try {
-      final now = DateTime.now();
-      final currentDay = now.weekday - 1; // Mon=0
-      final currentMinutes = now.hour * 60 + now.minute;
-
-      // Query ALL schedules for today (not filtered by class)
-      // This ensures we find the correct schedule regardless of student's profile classId
-      debugPrint('SCHEDULE LOOKUP: Searching for schedules on day $currentDay at $currentMinutes minutes');
-      final scheduleQuery = await FirebaseFirestore.instance
-          .collection('Schedules')
-          .where('dayIndex', isEqualTo: currentDay)
-          .get();
-
-      debugPrint('SCHEDULE LOOKUP: Found ${scheduleQuery.docs.length} schedules for today');
-
-      // Find the schedule that matches current time
-      for (var doc in scheduleQuery.docs) {
-        final data = doc.data();
-        final startHour = data['startHour'] as int? ?? 0;
-        final startMinute = data['startMinute'] as int? ?? 0;
-        final endHour = data['endHour'] as int? ?? 0;
-        final endMinute = data['endMinute'] as int? ?? 0;
-
-        final startMinutes = startHour * 60 + startMinute;
-        final endMinutes = endHour * 60 + endMinute;
-
-        // Check if current time is within this schedule
-        if (currentMinutes >= startMinutes && currentMinutes <= endMinutes) {
-          final scheduleClassId = data['classId'] as String? ?? '';
-          debugPrint('SCHEDULE MATCH: Found schedule "${data['title']}" for class $scheduleClassId');
-          debugPrint('SCHEDULE MATCH: Instructor ${data['instructorName']} (${data['instructorId']})');
-          
-          return {
-            'scheduleId': doc.id,
-            'scheduleTitle': data['title'] as String? ?? '',
-            'instructorId': data['instructorId'] as String? ?? '',
-            'instructorName': data['instructorName'] as String? ?? '',
-            'className': data['className'] as String?,
-            'classId': scheduleClassId, // Use the class ID from the SCHEDULE, not student profile
-          };
-        }
-      }
-
-      debugPrint('SCHEDULE LOOKUP: No matching schedule found for current time');
-      // No matching schedule found
-      return {
-        'scheduleId': null,
-        'scheduleTitle': null,
-        'instructorId': null,
-        'instructorName': null,
-        'className': null,
-        'classId': null,
-      };
-    } catch (e) {
-      debugPrint('Error getting schedule info: $e');
-      return {
-        'scheduleId': null,
-        'scheduleTitle': null,
-        'instructorId': null,
-        'instructorName': null,
-        'className': null,
-        'classId': null,
-      };
-    }
+    final scheduleService = ScheduleService();
+    return await scheduleService.getCurrentScheduleForClass(classId);
   }
 }
