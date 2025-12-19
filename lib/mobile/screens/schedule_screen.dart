@@ -14,7 +14,7 @@ class ScheduleScreen extends StatefulWidget {
 class _ScheduleScreenState extends State<ScheduleScreen> {
   final List<String> _days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
   final int _startHour = 7;
-  final int _endHour = 17;
+  final int _endHour = 22;
   final double _hourHeight = 80.0;
   
   String? _selectedInstructorId; // null means "All Instructors"
@@ -260,21 +260,38 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
   }
 
   Widget _buildScheduleView(List<ClassSession> schedules, String studentClassId) {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: SizedBox(
-        width: MediaQuery.of(context).size.width * 1.5,
-        child: Column(
-          children: [
-            // Day headers
-            _buildDayHeaders(),
-            // Schedule grid
-            Expanded(
-              child: _buildScheduleGrid(schedules, studentClassId),
+    // Fetch student's class name once at this level
+    return StreamBuilder<DocumentSnapshot>(
+      stream: studentClassId.isNotEmpty
+          ? FirebaseFirestore.instance
+              .collection('ClassGroups')
+              .doc(studentClassId)
+              .snapshots()
+          : null,
+      builder: (context, studentClassSnapshot) {
+        String studentClassName = '';
+        if (studentClassSnapshot.hasData && studentClassSnapshot.data!.exists) {
+          final data = studentClassSnapshot.data!.data() as Map<String, dynamic>;
+          studentClassName = data['name'] ?? '';
+        }
+
+        return SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: SizedBox(
+            width: MediaQuery.of(context).size.width * 1.5,
+            child: Column(
+              children: [
+                // Day headers
+                _buildDayHeaders(),
+                // Schedule grid
+                Expanded(
+                  child: _buildScheduleGrid(schedules, studentClassName),
+                ),
+              ],
             ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 
@@ -318,7 +335,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
     );
   }
 
-  Widget _buildScheduleGrid(List<ClassSession> schedules, String studentClassId) {
+  Widget _buildScheduleGrid(List<ClassSession> schedules, String studentClassName) {
     return SingleChildScrollView(
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -329,7 +346,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
           ...List.generate(7, (dayIndex) {
             final daySessions = schedules.where((s) => s.dayIndex == dayIndex).toList();
             return Expanded(
-              child: _buildDayColumn(dayIndex, daySessions, studentClassId),
+              child: _buildDayColumn(dayIndex, daySessions, studentClassName),
             );
           }),
         ],
@@ -357,7 +374,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
     );
   }
 
-  Widget _buildDayColumn(int dayIndex, List<ClassSession> sessions, String studentClassId) {
+  Widget _buildDayColumn(int dayIndex, List<ClassSession> sessions, String studentClassName) {
     final totalHeight = (_endHour - _startHour) * _hourHeight;
     
     return SizedBox(
@@ -387,14 +404,14 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
               );
             }),
             // Schedule blocks
-            ...sessions.map((session) => _buildSessionBlock(session, studentClassId)),
+            ...sessions.map((session) => _buildSessionBlock(session, studentClassName)),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildSessionBlock(ClassSession session, String studentClassId) {
+  Widget _buildSessionBlock(ClassSession session, String studentClassName) {
     final startMinutes = (session.startTime.hour * 60) + session.startTime.minute;
     final endMinutes = (session.endTime.hour * 60) + session.endTime.minute;
     final gridStartMinutes = _startHour * 60;
@@ -403,79 +420,82 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
     final durationHours = (endMinutes - startMinutes) / 60;
     final height = durationHours * _hourHeight;
 
-    // Check if this schedule matches student's class
-    final isMyClass = session.classId.isNotEmpty && session.classId == studentClassId;
-
     return Positioned(
       top: topOffset,
       left: 2,
       right: 2,
       height: height - 4,
-      child: GestureDetector(
-        onTap: () => _showSessionDetails(session),
-        child: Container(
-          padding: const EdgeInsets.all(6),
-          decoration: BoxDecoration(
-            color: session.color.withOpacity(0.9),
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(
-              color: isMyClass ? Colors.amber.shade700 : Colors.white,
-              width: isMyClass ? 2 : 1,
-            ),
-            boxShadow: isMyClass
-                ? [
-                    BoxShadow(
-                      color: Colors.amber.shade300.withOpacity(0.5),
-                      blurRadius: 8,
-                      spreadRadius: 1,
+      child: StreamBuilder<DocumentSnapshot>(
+        stream: session.classId.isNotEmpty
+            ? FirebaseFirestore.instance
+                .collection('ClassGroups')
+                .doc(session.classId)
+                .snapshots()
+            : null,
+        builder: (context, sessionClassSnapshot) {
+          String sessionClassName = '';
+          if (sessionClassSnapshot.hasData && sessionClassSnapshot.data!.exists) {
+            final data = sessionClassSnapshot.data!.data() as Map<String, dynamic>;
+            sessionClassName = data['name'] ?? '';
+          }
+
+          // Check if this schedule's class name matches student's class name
+          final isMyClass = sessionClassName.isNotEmpty &&
+              studentClassName.isNotEmpty &&
+              sessionClassName == studentClassName;
+
+          return GestureDetector(
+            onTap: () => _showSessionDetails(session),
+            child: Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: session.color.withOpacity(0.9),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                  color: isMyClass ? Colors.amber.shade700 : Colors.white,
+                  width: isMyClass ? 2 : 1,
+                ),
+                boxShadow: isMyClass
+                    ? [
+                        BoxShadow(
+                          color: Colors.amber.shade300.withOpacity(0.5),
+                          blurRadius: 8,
+                          spreadRadius: 1,
+                        ),
+                      ]
+                    : null,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    session.title,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 11,
+                      color: Colors.black87,
                     ),
-                  ]
-                : null,
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                session.title,
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 11,
-                  color: Colors.black87,
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (sessionClassName.isNotEmpty)
+                    Text(
+                      sessionClassName,
+                      style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w600),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  Text(
+                    session.subtitle,
+                    style: const TextStyle(fontSize: 9),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
               ),
-              if (session.classId.isNotEmpty)
-                StreamBuilder<DocumentSnapshot>(
-                  stream: FirebaseFirestore.instance
-                      .collection('ClassGroups')
-                      .doc(session.classId)
-                      .snapshots(),
-                  builder: (context, snapshot) {
-                    if (snapshot.hasData && snapshot.data!.exists) {
-                      final data = snapshot.data!.data() as Map<String, dynamic>;
-                      final className = data['name'] ?? '';
-                      if (className.isNotEmpty) {
-                        return Text(
-                          className,
-                          style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w600),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        );
-                      }
-                    }
-                    return const SizedBox.shrink();
-                  },
-                ),
-              Text(
-                session.subtitle,
-                style: const TextStyle(fontSize: 9),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ],
-          ),
-        ),
+            ),
+          );
+        },
       ),
     );
   }

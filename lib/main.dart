@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'shared/screens/login_screen.dart';
 import 'mobile/screens/main_screen.dart';
 import 'mobile/screens/camera_screen.dart';
@@ -21,6 +22,9 @@ void main() async {
       options: DefaultFirebaseOptions.currentPlatform,
     );
     debugPrint('✅ Firebase initialized successfully');
+    
+    // Disable persistence as requested by user to prevent "flickering"
+    FirebaseFirestore.instance.settings = const Settings(persistenceEnabled: false);
   } catch (e) {
     debugPrint('⚠️ Firebase initialization failed: $e');
   }

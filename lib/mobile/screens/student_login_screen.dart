@@ -12,13 +12,16 @@ class MobileStudentLoginScreen extends StatefulWidget {
 class _MobileStudentLoginScreenState extends State<MobileStudentLoginScreen> {
   final _formKey = GlobalKey<FormState>();
   final _studentNumberController = TextEditingController();
+  final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _isLoading = false;
   bool _obscurePassword = true;
+  bool _useStudentIdLogin = true; // Default to Student ID login
 
   @override
   void dispose() {
     _studentNumberController.dispose();
+    _emailController.dispose();
     _passwordController.dispose();
     super.dispose();
   }
@@ -29,25 +32,38 @@ class _MobileStudentLoginScreenState extends State<MobileStudentLoginScreen> {
     setState(() => _isLoading = true);
 
     try {
-      // First, find the student by student number to get their email
-      final studentQuery = await FirebaseFirestore.instance
-          .collection('Students')
-          .where('studentNumber', isEqualTo: _studentNumberController.text.trim())
-          .limit(1)
-          .get();
+      if (_useStudentIdLogin) {
+        // Student ID Login Flow (Password-less)
+        final studentQuery = await FirebaseFirestore.instance
+            .collection('Students')
+            .where('studentNumber', isEqualTo: _studentNumberController.text.trim())
+            .limit(1)
+            .get();
 
-      if (studentQuery.docs.isEmpty) {
-        throw Exception('No student found with this student number');
+        if (studentQuery.docs.isEmpty) {
+          throw Exception('No student found with this student ID');
+        }
+
+        final studentData = studentQuery.docs.first.data();
+        final email = studentData['email'] as String;
+        final password = studentData['password'] as String?;
+
+        if (password == null) {
+          throw Exception('Account error. Please contact administrator.');
+        }
+
+        // Sign in automatically with stored credentials
+        await FirebaseAuth.instance.signInWithEmailAndPassword(
+          email: email,
+          password: password,
+        );
+      } else {
+        // Email/Password Login Flow
+        await FirebaseAuth.instance.signInWithEmailAndPassword(
+          email: _emailController.text.trim(),
+          password: _passwordController.text,
+        );
       }
-
-      final studentData = studentQuery.docs.first.data();
-      final email = studentData['email'] as String;
-
-      // Sign in with the email and password
-      final credential = await FirebaseAuth.instance.signInWithEmailAndPassword(
-        email: email,
-        password: _passwordController.text,
-      );
 
       if (mounted) {
         Navigator.pushReplacementNamed(context, '/home');
@@ -55,11 +71,13 @@ class _MobileStudentLoginScreenState extends State<MobileStudentLoginScreen> {
     } on FirebaseAuthException catch (e) {
       String message = 'Login failed';
       if (e.code == 'user-not-found') {
-        message = 'No account found with this student number';
+        message = _useStudentIdLogin 
+            ? 'No account found with this student ID'
+            : 'No account found with this email';
       } else if (e.code == 'wrong-password') {
         message = 'Incorrect password';
       } else if (e.code == 'invalid-email') {
-        message = 'Invalid student number';
+        message = 'Invalid email address';
       }
       
       if (mounted) {
@@ -160,59 +178,99 @@ class _MobileStudentLoginScreenState extends State<MobileStudentLoginScreen> {
                       ),
                       child: Column(
                         children: [
-                          // Student Number field
-                          TextFormField(
-                            controller: _studentNumberController,
-                            decoration: InputDecoration(
-                              labelText: 'Student Number',
-                              prefixIcon: const Icon(Icons.badge_outlined),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
+                          // Student Number or Email field
+                          if (_useStudentIdLogin)
+                            TextFormField(
+                              controller: _studentNumberController,
+                              decoration: InputDecoration(
+                                labelText: 'Student ID',
+                                hintText: 'e.g. 2026-XXXX',
+                                prefixIcon: const Icon(Icons.badge_outlined),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                filled: true,
+                                fillColor: Colors.grey.shade50,
                               ),
-                              filled: true,
-                              fillColor: Colors.grey.shade50,
+                              validator: (value) {
+                                if (value == null || value.isEmpty) {
+                                  return 'Please enter your student ID';
+                                }
+                                return null;
+                              },
+                            )
+                          else
+                            TextFormField(
+                              controller: _emailController,
+                              keyboardType: TextInputType.emailAddress,
+                              decoration: InputDecoration(
+                                labelText: 'Email',
+                                prefixIcon: const Icon(Icons.email_outlined),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                filled: true,
+                                fillColor: Colors.grey.shade50,
+                              ),
+                              validator: (value) {
+                                if (value == null || value.isEmpty) {
+                                  return 'Please enter your email';
+                                }
+                                if (!value.contains('@')) {
+                                  return 'Please enter a valid email';
+                                }
+                                return null;
+                              },
                             ),
-                            validator: (value) {
-                              if (value == null || value.isEmpty) {
-                                return 'Please enter your student number';
-                              }
-                              return null;
-                            },
-                          ),
                           const SizedBox(height: 16),
 
-                          // Password field
-                          TextFormField(
-                            controller: _passwordController,
-                            obscureText: _obscurePassword,
-                            decoration: InputDecoration(
-                              labelText: 'Password',
-                              prefixIcon: const Icon(Icons.lock_outline),
-                              suffixIcon: IconButton(
-                                icon: Icon(
-                                  _obscurePassword ? Icons.visibility_off : Icons.visibility,
+                          // Password field (only for Email/Password login)
+                          if (!_useStudentIdLogin)
+                            TextFormField(
+                              controller: _passwordController,
+                              obscureText: _obscurePassword,
+                              decoration: InputDecoration(
+                                labelText: 'Password',
+                                prefixIcon: const Icon(Icons.lock_outline),
+                                suffixIcon: IconButton(
+                                  icon: Icon(
+                                    _obscurePassword ? Icons.visibility_off : Icons.visibility,
+                                  ),
+                                  onPressed: () {
+                                    setState(() => _obscurePassword = !_obscurePassword);
+                                  },
                                 ),
-                                onPressed: () {
-                                  setState(() => _obscurePassword = !_obscurePassword);
-                                },
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                filled: true,
+                                fillColor: Colors.grey.shade50,
                               ),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              filled: true,
-                              fillColor: Colors.grey.shade50,
+                              validator: (value) {
+                                if (value == null || value.isEmpty) {
+                                  return 'Please enter your password';
+                                }
+                                if (value.length < 6) {
+                                  return 'Password must be at least 6 characters';
+                                }
+                                return null;
+                              },
                             ),
-                            validator: (value) {
-                              if (value == null || value.isEmpty) {
-                                return 'Please enter your password';
-                              }
-                              if (value.length < 6) {
-                                return 'Password must be at least 6 characters';
-                              }
-                              return null;
+                          if (!_useStudentIdLogin) const SizedBox(height: 16),
+
+                          // Toggle login method button
+                          TextButton(
+                            onPressed: () {
+                              setState(() => _useStudentIdLogin = !_useStudentIdLogin);
                             },
+                            child: Text(
+                              _useStudentIdLogin 
+                                  ? 'Use Email & Password Instead'
+                                  : 'Use Student ID Instead',
+                              style: TextStyle(color: Colors.blue.shade700),
+                            ),
                           ),
-                          const SizedBox(height: 24),
+                          const SizedBox(height: 8),
 
                           // Login button
                           SizedBox(

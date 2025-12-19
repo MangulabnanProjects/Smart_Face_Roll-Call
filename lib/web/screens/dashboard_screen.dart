@@ -8,6 +8,12 @@ import '../widgets/web_sidebar.dart';
 import 'manage_screen.dart'; // Import the new screen
 import 'users_screen.dart';
 import '../../shared/models/class_group.dart';
+import '../../shared/models/student.dart'; // Import Student model
+import '../../shared/models/class_session.dart'; // Import ClassSession model
+import '../../shared/models/attendance.dart'; // Import Attendance model
+import '../../shared/services/attendance_service.dart';
+import '../../shared/services/student_service.dart'; // Import StudentService
+import '../../shared/services/schedule_service.dart'; // Import ScheduleService
 
 /// Web dashboard with attendance analytics and charts
 class WebDashboardScreen extends StatefulWidget {
@@ -21,31 +27,170 @@ class _WebDashboardScreenState extends State<WebDashboardScreen> {
   String _currentPage = 'dashboard'; // Track current page
   String? _selectedClassId; // Selected class from dropdown
 
-  // Dummy attendance data - same as mobile
-  final List<int> attendanceData = [12, 15, 18, 14, 20, 17, 22];
-  final List<String> days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  // Real Attendance Data State
+  List<int> weeklyAttendanceCounts = List.filled(7, 0);
+  List<String> dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  int todayAttendanceCount = 0;
+  int weekAttendanceCount = 0;
+  bool isLoading = true;
+  
+  // Attendance Sheet State
+  DateTime _selectedDate = DateTime.now();
+  List<Student> _classStudents = [];
+  List<Attendance> _dailyAttendance = [];
+  bool _isSheetLoading = false;
+  
+  // Schedule/Subject Filter State
+  List<ClassSession> _dailySchedules = [];
+  String? _selectedScheduleId;
+  
+  List<ClassGroup> _instructorClasses = [];
+  
+  @override
+  void initState() {
+    super.initState();
+    _loadInitialData();
+  }
+
+  Future<void> _loadInitialData() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    // 1. Fetch Instructor's Classes
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('ClassGroups')
+          .where('instructorId', isEqualTo: user.uid)
+          .get();
+          
+      final classes = snapshot.docs
+          .map((doc) => ClassGroup.fromMap(doc.data(), doc.id))
+          .toList();
+          
+      if (mounted) {
+        setState(() {
+          _instructorClasses = classes;
+        });
+        // 2. Load Stats for All Classes (Default)
+        debugPrint('DASHBOARD: Loaded ${_instructorClasses.length} classes for user ${user.uid}');
+        for(var c in _instructorClasses) debugPrint('CLASS: ${c.name} (${c.id})');
+        _loadStats();
+      }
+    } catch (e) {
+      debugPrint('Error loading classes: $e');
+      if (mounted) setState(() => isLoading = false);
+    }
+  }
+
+  // Load data for the Attendance Sheet (Students + Attendance)
+  Future<void> _loadDailySheetData() async {
+     if (!mounted) return;
+     setState(() => _isSheetLoading = true);
+
+     final classId = _selectedClassId;
+     // If no class selected, we can't really show a roster easily unless we aggregator ALL, which is messy.
+     // For now, if "All Classes" is selected, we might default to the first one or show empty.
+     // Let's look at the first available class if 'all' is selected to be safe.
+     final targetClassId = classId ?? (_instructorClasses.isNotEmpty ? _instructorClasses.first.id : '');
+
+     if (targetClassId.isEmpty) {
+       setState(() => _isSheetLoading = false);
+       return;
+     }
+
+     try {
+       final studentService = StudentService();
+       final attendanceService = AttendanceService();
+       final scheduleService = ScheduleService();
+
+       // 1. Get Roster (Stream converted to Future for this snapshot)
+       final studentsStream = studentService.getStudentsByClass(targetClassId);
+       final students = await studentsStream.first;
+       
+       // 2. Get Daily Attendance
+       final attendance = await attendanceService.getAttendanceForClassDate(targetClassId, _selectedDate);
+       
+       // 3. Get Daily Schedules
+       final schedules = await scheduleService.getSchedulesForClassDate(targetClassId, _selectedDate);
+
+       if (mounted) {
+         setState(() {
+           _classStudents = students;
+           _dailyAttendance = attendance;
+           _dailySchedules = schedules;
+           _isSheetLoading = false;
+           // Reset filter if not relevant anymore, though we might want to keep it if valid
+           _selectedScheduleId = null; 
+         });
+       }
+     } catch (e) {
+       debugPrint('Error loading sheet data: $e');
+       if (mounted) setState(() => _isSheetLoading = false);
+     }
+  }
+
+  Future<void> _loadStats() async {
+    if (mounted) setState(() => isLoading = true);
+
+    try {
+      final attendanceService = AttendanceService();
+      
+      List<String> targetClassIds = [];
+
+      if (_selectedClassId != null) {
+        // Filter by specific class
+        targetClassIds = [_selectedClassId!];
+      } else {
+        // "All Classes": Aggregated stats for all instructor classes
+        targetClassIds = _instructorClasses.map((c) => c.id).toList();
+      }
+
+      if (targetClassIds.isEmpty) {
+        if (mounted) setState(() => isLoading = false);
+        return;
+      }
+
+      // Fetch aggregated stats (works for 1 or many classes)
+      debugPrint('DASHBOARD: Fetching stats for class IDs: $targetClassIds');
+      final stats = await attendanceService.getClassWeeklyUniqueAttendanceStats(targetClassIds);
+
+      if (mounted) {
+        setState(() {
+          weeklyAttendanceCounts = List<int>.from(stats['weeklyCounts']);
+           // Use dynamic labels if returned, else default
+          if (stats['dayLabels'] != null) {
+             dayLabels = List<String>.from(stats['dayLabels']);
+          }
+          todayAttendanceCount = stats['todayCount'];
+          weekAttendanceCount = stats['weekCount'];
+          isLoading = false;
+        });
+        
+        // Load sheet data after main stats
+        _loadDailySheetData();
+      }
+    } catch (e) {
+      debugPrint('Error loading web stats: $e');
+      if (mounted) setState(() => isLoading = false);
+    }
+  }
+
+    // Migration tool removed
+
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: Row(
         children: [
-          // Sidebar
           WebSidebar(
             selectedPage: _currentPage,
-            onPageSelected: (page) {
-              setState(() => _currentPage = page);
-            },
+            onPageSelected: (page) => setState(() => _currentPage = page),
           ),
-          
-          // Main content
           Expanded(
             child: Column(
               children: [
-                // Navbar
                 const WebNavbar(),
-                
-                // Content area
                 Expanded(
                   child: _currentPage == 'manage' 
                     ? const WebManageScreen()
@@ -67,7 +212,6 @@ class _WebDashboardScreenState extends State<WebDashboardScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Page title with dropdown on the right
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -78,18 +222,14 @@ class _WebDashboardScreenState extends State<WebDashboardScreen> {
                   children: [
                     const Text(
                       'Attendance Dashboard',
-                      style: TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.bold,
-                      ),
+                      style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 8),
-                    Text(
-                      'Overview of student attendance and analytics',
-                      style: TextStyle(
-                        fontSize: 16,
-                        color: Colors.grey.shade600,
-                      ),
+                     Text(
+                      _selectedClassId == null 
+                          ? 'Overview of all your classes' 
+                          : 'Analytics for ${_instructorClasses.firstWhere((c) => c.id == _selectedClassId, orElse: () => ClassGroup(id: '', name: 'Class', instructorId: '')).name}',
+                      style: TextStyle(fontSize: 16, color: Colors.grey.shade600),
                     ),
                   ],
                 ),
@@ -101,89 +241,259 @@ class _WebDashboardScreenState extends State<WebDashboardScreen> {
           
           const SizedBox(height: 32),
           
-          // Summary stats row
-          _buildStatsRow(),
-          
-          const SizedBox(height: 32),
-          
-          // Charts row
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Left column - Attendance chart
-              Expanded(
-                flex: 2,
-                child: Column(
-                  children: [
-                    _buildAttendanceChart(),
-                    const SizedBox(height: 24),
-                    _buildStudentImagesPlaceholder(),
-                  ],
+          if (isLoading)
+             const Center(child: CircularProgressIndicator())
+          else ...[
+            _buildStatsRow(),
+            const SizedBox(height: 32),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  flex: 2,
+                  child: Column(
+                    children: [
+                      _buildAttendanceChart(),
+                      const SizedBox(height: 24),
+                      // Optional: Student list or preview could go here
+                    ],
+                  ),
                 ),
-              ),
-              
-              const SizedBox(width: 24),
-              
-              // Quick stats
-              Expanded(
-                child: _buildQuickStats(),
-              ),
-            ],
-          ),
-          
-          const SizedBox(height: 32),
-          
-          // Recent activity
-          _buildRecentActivity(),
+                const SizedBox(width: 24),
+                Expanded(child: _buildQuickStats()),
+              ],
+            ),
+            const SizedBox(height: 32),
+             _buildAttendanceSheet(),
+            const SizedBox(height: 32),
+            _buildRecentActivity(),
+          ]
         ],
       ),
     );
   }
 
-  Widget _buildClassDropdown() {
-    final currentUser = FirebaseAuth.instance.currentUser;
-    if (currentUser == null) return const SizedBox.shrink();
-
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('ClassGroups')
-          .snapshots(),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData) {
-          return const SizedBox.shrink();
-        }
-
-        final allClasses = snapshot.data!.docs
-            .map((doc) => ClassGroup.fromMap(doc.data() as Map<String, dynamic>, doc.id))
-            .where((classGroup) => classGroup.instructorId == currentUser.uid)
-            .toList();
-
-        if (allClasses.isEmpty) {
-          return const SizedBox.shrink();
-        }
-
-        // Find selected class name
-        String selectedClassName = 'Select class';
-        if (_selectedClassId != null) {
-          final selectedClass = allClasses.firstWhere(
-            (c) => c.id == _selectedClassId,
-            orElse: () => allClasses.first,
-          );
-          selectedClassName = selectedClass.name;
-        }
-
-        return PopupMenuButton<String>(
-          offset: const Offset(0, 45),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(8),
+  Widget _buildAttendanceSheet() {
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
           ),
-          onSelected: (String value) {
-            setState(() {
-              _selectedClassId = value;
-            });
-          },
-          itemBuilder: (BuildContext context) {
-            return allClasses.map((classGroup) {
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header with Date Picker & Subject Filter
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Daily Attendance Sheet',
+                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Full roster status for selected date',
+                      style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+                    ),
+                  ],
+                ),
+              ),
+              
+              // 1. Subject Filter Dropdown (Collapsing Folder Logic)
+              if (_dailySchedules.isNotEmpty) ...[
+                 Container(
+                   margin: const EdgeInsets.only(right: 12),
+                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+                   decoration: BoxDecoration(
+                     border: Border.all(color: Colors.grey.shade300),
+                     borderRadius: BorderRadius.circular(8),
+                   ),
+                   child: DropdownButton<String?>(
+                     value: _selectedScheduleId,
+                     hint: const Text('All Day'),
+                     underline: const SizedBox(),
+                     items: [
+                       const DropdownMenuItem<String?>(
+                         value: null,
+                         child: Text('All Day', style: TextStyle(fontWeight: FontWeight.bold)),
+                       ),
+                       ..._dailySchedules.map((schedule) {
+                         return DropdownMenuItem<String?>(
+                           value: schedule.id,
+                           child: Text('${schedule.title} (${schedule.startTime.hour}:${schedule.startTime.minute.toString().padLeft(2,'0')})'),
+                         );
+                       }).toList(),
+                     ],
+                     onChanged: (val) {
+                       setState(() => _selectedScheduleId = val);
+                     },
+                   ),
+                 ),
+              ],
+              
+              // Date Picker
+              OutlinedButton.icon(
+                icon: const Icon(Icons.calendar_today, size: 16),
+                label: Text(Attendance.formatDate(_selectedDate)),
+                onPressed: () async {
+                  final picked = await showDatePicker(
+                    context: context,
+                    initialDate: _selectedDate,
+                    firstDate: DateTime(2020),
+                    lastDate: DateTime.now(),
+                  );
+                  if (picked != null) {
+                    setState(() => _selectedDate = picked);
+                    _loadDailySheetData();
+                  }
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: 24),
+          
+          if (_isSheetLoading)
+            const Center(child: Padding(padding: EdgeInsets.all(32), child: CircularProgressIndicator()))
+          else if (_classStudents.isEmpty)
+             Center(
+               child: Padding(
+                 padding: const EdgeInsets.all(32), 
+                 child: Text('No students found or no class selected.', style: TextStyle(color: Colors.grey.shade500))
+               )
+             )
+          else
+            SizedBox(
+              width: double.infinity,
+              child: DataTable(
+                headingRowColor: MaterialStateProperty.all(Colors.grey.shade50),
+                columns: const [
+                  DataColumn(label: Text('Student ID', style: TextStyle(fontWeight: FontWeight.bold))),
+                  DataColumn(label: Text('Full Name', style: TextStyle(fontWeight: FontWeight.bold))),
+                  DataColumn(label: Text('Status', style: TextStyle(fontWeight: FontWeight.bold))),
+                  DataColumn(label: Text('Time In', style: TextStyle(fontWeight: FontWeight.bold))),
+                ],
+                rows: _classStudents.map((student) {
+                   // Check if present logic
+                   // Default: Present if ANY record found for student today
+                   // If Filtered: Present if record matches filter scheduleId
+                   
+                   Attendance? record;
+                   bool isPresent = false;
+                   
+                   try {
+                     if (_selectedScheduleId == null) {
+                       // "All Day" - Must attend ALL schedules
+                       if (_dailySchedules.isNotEmpty) {
+                         final studentRecords = _dailyAttendance.where((a) => a.studentId == student.id).toList();
+                         final attendedScheduleIds = studentRecords.map((a) => a.scheduleId).where((id) => id != null && id.isNotEmpty).toSet();
+                         final allScheduleIds = _dailySchedules.map((s) => s.id).toSet();
+                         isPresent = allScheduleIds.isNotEmpty && attendedScheduleIds.containsAll(allScheduleIds);
+                         if (isPresent && studentRecords.isNotEmpty) record = studentRecords.first;
+                       } else {
+                         record = _dailyAttendance.firstWhere(
+                           (a) => a.studentId == student.id,
+                           orElse: () => Attendance(id: '', studentId: '', studentName: '', studentNumber: '', classId: '', date: '', timestamp: DateTime(0), isPresent: false)
+                         );
+                         isPresent = record != null && record.id.isNotEmpty;
+                       }
+                     } else {
+                       // Specific Subject
+                       record = _dailyAttendance.firstWhere(
+                         (a) => a.studentId == student.id && (a.scheduleId == _selectedScheduleId),
+                         orElse: () => Attendance(id: '', studentId: '', studentName: '', studentNumber: '', classId: '', date: '', timestamp: DateTime(0), isPresent: false)
+                       );
+                       isPresent = record != null && record.id.isNotEmpty;
+                     }
+                   } catch (e) {
+                     record = null;
+                     isPresent = false;
+                   }
+                   
+                   return DataRow(
+                     cells: [
+                       DataCell(Text(student.studentNumber, style: const TextStyle(fontWeight: FontWeight.w500))),
+                       DataCell(Text(student.fullName)),
+                       DataCell(
+                         Container(
+                           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                           decoration: BoxDecoration(
+                             color: isPresent ? Colors.green.shade100 : Colors.red.shade100,
+                             borderRadius: BorderRadius.circular(20),
+                           ),
+                           child: Text(
+                             isPresent ? 'Present' : 'Absent',
+                             style: TextStyle(
+                               color: isPresent ? Colors.green.shade700 : Colors.red.shade700,
+                               fontWeight: FontWeight.bold,
+                               fontSize: 12,
+                             ),
+                           ),
+                         ),
+                       ),
+                       DataCell(Text(
+                         isPresent && record != null
+                             ? _formatTime12Hour(record.timestamp)
+                             : '-',
+                         style: TextStyle(color: Colors.grey.shade600),
+                       )),
+                     ],
+                   );
+                }).toList(),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+
+  Widget _buildClassDropdown() {
+    return PopupMenuButton<String>(
+      offset: const Offset(0, 45),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      onSelected: (String value) {
+        setState(() {
+          _selectedClassId = value == 'all' ? null : value;
+        });
+        _loadStats(); // Trigger refresh on selection
+      },
+      itemBuilder: (context) {
+        return [
+           // 1. "All Classes" Option
+           PopupMenuItem<String>(
+              value: 'all',
+              child: Row(
+                children: [
+                   Icon(
+                     Icons.dashboard,
+                     size: 16,
+                     color: _selectedClassId == null ? Colors.blue.shade700 : Colors.blue.shade400
+                   ),
+                   const SizedBox(width: 8),
+                   Text(
+                     'All Classes',
+                     style: TextStyle(
+                       fontWeight: _selectedClassId == null ? FontWeight.bold : FontWeight.normal,
+                       color: _selectedClassId == null ? Colors.blue.shade700 : Colors.black87,
+                     )
+                   )
+                ]
+              )
+           ),
+           // 2. Individual Class Options
+           ..._instructorClasses.map((classGroup) {
               final isSelected = _selectedClassId == classGroup.id;
               return PopupMenuItem<String>(
                 value: classGroup.id,
@@ -210,39 +520,40 @@ class _WebDashboardScreenState extends State<WebDashboardScreen> {
                   ],
                 ),
               );
-            }).toList();
-          },
-          child: Container(
-            constraints: const BoxConstraints(maxWidth: 280),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.blue.shade300),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.folder, color: Colors.blue.shade700, size: 20),
-                const SizedBox(width: 8),
-                Flexible(
-                  child: Text(
-                    selectedClassName,
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                      color: _selectedClassId != null ? Colors.black87 : Colors.grey.shade600,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                const SizedBox(width: 4),
-                Icon(Icons.arrow_drop_down, color: Colors.blue.shade700, size: 20),
-              ],
-            ),
-          ),
-        );
+            }).toList()
+        ];
       },
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 280),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.blue.shade300),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.folder, color: Colors.blue.shade700, size: 20),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                _selectedClassId == null 
+                   ? 'All Classes'
+                   : _instructorClasses.firstWhere((c) => c.id == _selectedClassId, orElse: () => ClassGroup(id: '', name: 'Selected Class', instructorId: '')).name,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  color: Colors.black87,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(width: 4),
+            Icon(Icons.arrow_drop_down, color: Colors.blue.shade700, size: 20),
+          ],
+        ),
+      ),
     );
   }
 
@@ -252,44 +563,44 @@ class _WebDashboardScreenState extends State<WebDashboardScreen> {
         Expanded(
           child: _buildStatCard(
             'Today\'s Attendance',
-            '22',
+            todayAttendanceCount.toString(),
             'Students Present',
             Icons.people,
             Colors.blue,
-            '+2 from yesterday',
+            null, // Removed static "+2 from yesterday"
           ),
         ),
         const SizedBox(width: 16),
         Expanded(
           child: _buildStatCard(
             'This Week',
-            '118',
+            weekAttendanceCount.toString(),
             'Total Check-ins',
             Icons.calendar_today,
             Colors.green,
-            '85% attendance rate',
+            null, // Removed static "85% attendance rate"
           ),
         ),
         const SizedBox(width: 16),
         Expanded(
           child: _buildStatCard(
             'Average',
-            '16.9',
+            (weekAttendanceCount / 7).toStringAsFixed(1),
             'Students/Day',
             Icons.trending_up,
             Colors.orange,
-            'Across 7 days',
+            null, // Removed static "Across 7 days"
           ),
         ),
         const SizedBox(width: 16),
         Expanded(
           child: _buildStatCard(
             'Photos Captured',
-            '47',
-            'This Week',
+             weekAttendanceCount.toString(),
+            'Total processed',
             Icons.photo_camera,
             Colors.purple,
-            '12 today',
+             '$todayAttendanceCount today',
           ),
         ),
       ],
@@ -299,10 +610,10 @@ class _WebDashboardScreenState extends State<WebDashboardScreen> {
   Widget _buildStatCard(
     String title,
     String value,
-    String subtitle,
+    String? subtitle,
     IconData icon,
     Color color,
-    String footer,
+    String? footer,
   ) {
     return Container(
       padding: const EdgeInsets.all(24),
@@ -350,30 +661,34 @@ class _WebDashboardScreenState extends State<WebDashboardScreen> {
               color: color,
             ),
           ),
-          const SizedBox(height: 4),
-          Text(
-            subtitle,
-            style: TextStyle(
-              color: Colors.grey.shade600,
-              fontSize: 14,
-            ),
-          ),
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text(
-              footer,
+          if (subtitle != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              subtitle,
               style: TextStyle(
-                color: color,
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
+                color: Colors.grey.shade600,
+                fontSize: 14,
               ),
             ),
-          ),
+          ],
+          if (footer != null) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                footer,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -431,15 +746,15 @@ class _WebDashboardScreenState extends State<WebDashboardScreen> {
                   leftTitles: AxisTitles(
                     sideTitles: SideTitles(
                       showTitles: true,
-                      reservedSize: 50,
+                      reservedSize: 40,
                       getTitlesWidget: (value, meta) {
                         return Padding(
                           padding: const EdgeInsets.only(right: 8),
                           child: Text(
-                            '${value.toInt()}',
+                            value.toInt().toString(),
                             style: TextStyle(
                               color: Colors.grey.shade600,
-                              fontSize: 14,
+                              fontSize: 12,
                             ),
                           ),
                         );
@@ -449,15 +764,17 @@ class _WebDashboardScreenState extends State<WebDashboardScreen> {
                   bottomTitles: AxisTitles(
                     sideTitles: SideTitles(
                       showTitles: true,
+                      interval: 1, // Fix: Ensure distinct integer steps
+                      reservedSize: 32,
                       getTitlesWidget: (value, meta) {
-                        if (value.toInt() >= 0 && value.toInt() < days.length) {
+                        if (value.toInt() >= 0 && value.toInt() < dayLabels.length) {
                           return Padding(
                             padding: const EdgeInsets.only(top: 12),
                             child: Text(
-                              days[value.toInt()],
+                              dayLabels[value.toInt()],
                               style: TextStyle(
                                 color: Colors.grey.shade600,
-                                fontSize: 14,
+                                fontSize: 12,
                                 fontWeight: FontWeight.w500,
                               ),
                             ),
@@ -478,14 +795,15 @@ class _WebDashboardScreenState extends State<WebDashboardScreen> {
                 minX: 0,
                 maxX: 6,
                 minY: 0,
-                maxY: 25,
+                // Add some padding to maxY so the line doesn't hit the top
+                maxY: (weeklyAttendanceCounts.reduce((curr, next) => curr > next ? curr : next) * 1.25) + 5,
                 lineBarsData: [
                   LineChartBarData(
                     spots: List.generate(
-                      attendanceData.length,
+                      weeklyAttendanceCounts.length,
                       (index) => FlSpot(
                         index.toDouble(),
-                        attendanceData[index].toDouble(),
+                        weeklyAttendanceCounts[index].toDouble(),
                       ),
                     ),
                     isCurved: true,
@@ -496,9 +814,9 @@ class _WebDashboardScreenState extends State<WebDashboardScreen> {
                       show: true,
                       getDotPainter: (spot, percent, barData, index) {
                         return FlDotCirclePainter(
-                          radius: 6,
+                          radius: 5,
                           color: Colors.blue,
-                          strokeWidth: 3,
+                          strokeWidth: 2,
                           strokeColor: Colors.white,
                         );
                       },
@@ -525,6 +843,33 @@ class _WebDashboardScreenState extends State<WebDashboardScreen> {
   }
 
   Widget _buildQuickStats() {
+    // Calculate Quick Stats
+    int maxIndex = 0;
+    int minIndex = 0;
+    int maxVal = -1;
+    int minVal = 999999;
+    
+    for (int i = 0; i < weeklyAttendanceCounts.length; i++) {
+      if (weeklyAttendanceCounts[i] > maxVal) {
+        maxVal = weeklyAttendanceCounts[i];
+        maxIndex = i;
+      }
+      if (weeklyAttendanceCounts[i] < minVal) {
+        minVal = weeklyAttendanceCounts[i];
+        minIndex = i;
+      }
+    }
+    
+    // If all zero
+    if (maxVal == 0) {
+      maxIndex = -1; 
+      minIndex = -1;
+    }
+
+    // Calculate Average
+    double total = weeklyAttendanceCounts.fold(0, (a, b) => a + b);
+    double avg = total / 7;
+
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
@@ -549,13 +894,73 @@ class _WebDashboardScreenState extends State<WebDashboardScreen> {
             ),
           ),
           const SizedBox(height: 24),
-          _buildQuickStatItem('Peak Day', 'Sunday', '22 students', Icons.star, Colors.amber),
+          _buildQuickStatItem(
+            'Peak Day', 
+            maxIndex != -1 ? dayLabels[maxIndex] : '-', 
+            '$maxVal students', 
+            Icons.star, 
+            Colors.amber
+          ),
           const SizedBox(height: 16),
-          _buildQuickStatItem('Lowest Day', 'Monday', '12 students', Icons.trending_down, Colors.red),
+          _buildQuickStatItem(
+            'Lowest Day', 
+             minIndex != -1 ? dayLabels[minIndex] : '-', 
+            '$minVal students', 
+            Icons.trending_down, 
+            Colors.red
+          ),
           const SizedBox(height: 16),
-          _buildQuickStatItem('Avg. Week', '118 check-ins', '16.9/day', Icons.analytics, Colors.blue),
+          _buildQuickStatItem(
+            'Avg. Week', 
+            '${total.toInt()} check-ins', 
+            '${avg.toStringAsFixed(1)}/day', 
+            Icons.analytics, 
+            Colors.blue
+          ),
           const SizedBox(height: 16),
-          _buildQuickStatItem('AI Model', 'Ready', 'Not trained yet', Icons.face, Colors.green),
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.green.shade50,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.green.shade200),
+          ),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.green.shade100,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(Icons.check_circle, color: Colors.green.shade700, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'AI Model',
+                      style: TextStyle(
+                        color: Colors.grey.shade600,
+                        fontSize: 12,
+                      ),
+                    ),
+                    Text(
+                      'Ready',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.green.shade700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
         ],
       ),
     );
@@ -803,5 +1208,21 @@ class _WebDashboardScreenState extends State<WebDashboardScreen> {
         ],
       ),
     );
+  }
+
+  /// Format DateTime to 12-hour format with AM/PM
+  String _formatTime12Hour(DateTime dateTime) {
+    int hour = dateTime.hour;
+    String period = hour >= 12 ? 'PM' : 'AM';
+    
+    // Convert to 12-hour format
+    if (hour > 12) {
+      hour = hour - 12;
+    } else if (hour == 0) {
+      hour = 12;
+    }
+    
+    String minute = dateTime.minute.toString().padLeft(2, '0');
+    return '$hour:$minute $period';
   }
 }

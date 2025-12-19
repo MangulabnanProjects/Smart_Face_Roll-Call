@@ -30,7 +30,8 @@ class AuthService {
   Future<UserCredential?> signUp({
     required String email,
     required String password,
-    required String name,
+    required String firstName,
+    required String lastName,
     required String instructorCode,
   }) async {
     if (!_isInitialized) {
@@ -44,19 +45,21 @@ class AuthService {
         password: password,
       );
       
-      // 2. Update display name
-      await userCredential.user?.updateDisplayName(name);
+      // 2. Update display name with full name
+      final fullName = '$firstName $lastName';
+      await userCredential.user?.updateDisplayName(fullName);
 
       // 3. Save to Firestore "Instructor_Information"
       // Note: Storing password in plain text is not recommended, but implementing as requested.
       await _firestore.collection('Instructor_Information').doc(userCredential.user!.uid).set({
         'Email': email,
-        'Full_Name': name,
+        'First_Name': firstName,
+        'Last_Name': lastName,
+        'Full_Name': fullName,
         'Instructor_ID': instructorCode,
         'Password': password, 
       });
       
-      return userCredential;
       return userCredential;
     } on FirebaseAuthException catch (e) {
       throw _handleAuthException(e);

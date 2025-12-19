@@ -83,6 +83,60 @@ class ScheduleService {
     return null;
   }
 
+  /// 6. Check for Class Conflicts
+  /// Prevents the same class from being scheduled at the same time by different instructors
+  /// Returns null if no conflict, or a Map with conflict details if one exists
+  Future<Map<String, dynamic>?> checkClassConflict({
+    required String classId,
+    required int dayIndex,
+    required int startHour,
+    required int startMinute,
+    required int endHour,
+    required int endMinute,
+    String? excludeScheduleId,
+  }) async {
+    // If no class is selected, skip this check
+    if (classId.isEmpty) return null;
+
+    // Query schedules for that Class and Day
+    final query = await _firestore
+        .collection(_collection)
+        .where('classId', isEqualTo: classId)
+        .where('dayIndex', isEqualTo: dayIndex)
+        .get();
+
+    final newStartMins = startHour * 60 + startMinute;
+    final newEndMins = endHour * 60 + endMinute;
+
+    for (var doc in query.docs) {
+      if (doc.id == excludeScheduleId) continue;
+      
+      final data = doc.data();
+      final existingStartHour = data['startHour'] as int;
+      final existingStartMin = data['startMinute'] as int;
+      final existingEndHour = data['endHour'] as int;
+      final existingEndMin = data['endMinute'] as int;
+
+      final existingStartTotal = existingStartHour * 60 + existingStartMin;
+      final existingEndTotal = existingEndHour * 60 + existingEndMin;
+
+      // Overlap logic: (StartA < EndB) and (EndA > StartB)
+      if (newStartMins < existingEndTotal && newEndMins > existingStartTotal) {
+         return {
+           'classId': classId,
+           'instructorName': data['instructorName'],
+           'room': data['subtitle'],
+           'title': data['title'],
+           'startHour': existingStartHour,
+           'startMinute': existingStartMin,
+           'endHour': existingEndHour,
+           'endMinute': existingEndMin,
+         };
+      }
+    }
+    return null;
+  }
+
   // --- STUDENT CAMERA RESTRICTION LOGIC (Mock/Placeholder) ---
   
   // Mock Schedule Data (Temporary)
@@ -141,5 +195,31 @@ class ScheduleService {
   static String getRestrictionMessage(String section) {
     if (isCameraAllowed(section)) return "";
     return "Attendance is only allowed during your scheduled class hours.";
+  }
+
+  /// 7. Get Schedules for a Class on a Specific Date
+  /// Returns list of schedules for the given class that occur on the given date's weekday
+  Future<List<ClassSession>> getSchedulesForClassDate(String classId, DateTime date) async {
+    try {
+      // Dart DateTime.weekday: Mon=1, Sun=7
+      // Our App Logic: Usually 0-based index [Mon, Tue...] depending on how saved.
+      // Let's check how checkRoomConflict uses it: 'dayIndex'
+      // In manage_screen: _days = ['Mon', 'Tue'...] -> dayIndex 0 = Mon.
+      // So we convert DateTime.weekday (1=Mon) to 0-based (0=Mon).
+      final dayIndex = date.weekday - 1;
+
+      final query = await _firestore
+          .collection(_collection)
+          .where('classId', isEqualTo: classId)
+          .where('dayIndex', isEqualTo: dayIndex)
+          .get();
+
+      return query.docs
+          .map((doc) => ClassSession.fromMap(doc.data(), doc.id))
+          .toList();
+    } catch (e) {
+      debugPrint('Error fetching class schedules: $e');
+      return [];
+    }
   }
 }

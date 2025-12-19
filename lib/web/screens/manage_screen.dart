@@ -28,7 +28,7 @@ class _WebManageScreenState extends State<WebManageScreen> {
 
   // Config
   int get _startHour => 7; // 7 AM
-  int get _endHour => 17; // 5 PM
+  int get _endHour => 22; // 10 PM
   final double _hourHeight = 60.0;
   final double _timeColumnWidth = 80.0;
   final double _headerHeight = 50.0;
@@ -87,14 +87,20 @@ class _WebManageScreenState extends State<WebManageScreen> {
         title: const Text('Create New Class/Group'),
         content: TextField(
           controller: nameController,
-          decoration: const InputDecoration(labelText: 'Class Name (e.g. BSCS-4A)', border: OutlineInputBorder()),
+          textCapitalization: TextCapitalization.characters,
+          decoration: const InputDecoration(
+            labelText: 'Class Name (e.g. BSCS-4A)',
+            border: OutlineInputBorder(),
+          ),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
           ElevatedButton(
             onPressed: () async {
               if (nameController.text.isNotEmpty) {
-                await _classService.addClassGroup(nameController.text);
+                // Ensure uppercase even if auto-capitalization fails
+                final className = nameController.text.toUpperCase();
+                await _classService.addClassGroup(className);
                 // Check if the Dialog itself is still active
                 if (context.mounted) Navigator.pop(context);
               }
@@ -349,6 +355,42 @@ class _WebManageScreenState extends State<WebManageScreen> {
                     return;
                   }
 
+                  // Class Conflict Check
+                  if (selectedClassId != null && selectedClassId!.isNotEmpty) {
+                    final classConflict = await _scheduleService.checkClassConflict(
+                      classId: selectedClassId!,
+                      dayIndex: selectedDay,
+                      startHour: start.hour,
+                      startMinute: start.minute,
+                      endHour: end.hour,
+                      endMinute: end.minute,
+                    );
+
+                    if (classConflict != null) {
+                      final conflictStart = TimeOfDay(
+                        hour: classConflict['startHour'] as int,
+                        minute: classConflict['startMinute'] as int,
+                      );
+                      final conflictEnd = TimeOfDay(
+                        hour: classConflict['endHour'] as int,
+                        minute: classConflict['endMinute'] as int,
+                      );
+                      
+                      // Get class name from Firestore
+                      final classDoc = await FirebaseFirestore.instance
+                          .collection('ClassGroups')
+                          .doc(selectedClassId)
+                          .get();
+                      final className = classDoc.data()?['name'] ?? 'this class';
+                      
+                      setDialogState(() => errorMsg = 
+                        '$className already has a schedule with ${classConflict['instructorName']}\n'
+                        'on ${_days[selectedDay]} from ${conflictStart.format(context)} to ${conflictEnd.format(context)}\n'
+                        'in Room ${classConflict['room']}');
+                      return;
+                    }
+                  }
+
 
                   // Create new session object
                   final newSession = ClassSession(
@@ -600,6 +642,43 @@ class _WebManageScreenState extends State<WebManageScreen> {
                       'Room ${roomConflict['room']} is already booked by ${roomConflict['instructorName']}\n'
                       'on ${_days[selectedDay]} from ${conflictStart.format(context)} to ${conflictEnd.format(context)}');
                     return;
+                  }
+
+                  // Class Conflict Check
+                  if (selectedClassId != null && selectedClassId!.isNotEmpty) {
+                    final classConflict = await _scheduleService.checkClassConflict(
+                      classId: selectedClassId!,
+                      dayIndex: selectedDay,
+                      startHour: start.hour,
+                      startMinute: start.minute,
+                      endHour: end.hour,
+                      endMinute: end.minute,
+                      excludeScheduleId: session.id,
+                    );
+
+                    if (classConflict != null) {
+                      final conflictStart = TimeOfDay(
+                        hour: classConflict['startHour'] as int,
+                        minute: classConflict['startMinute'] as int,
+                      );
+                      final conflictEnd = TimeOfDay(
+                        hour: classConflict['endHour'] as int,
+                        minute: classConflict['endMinute'] as int,
+                      );
+                      
+                      // Get class name from Firestore
+                      final classDoc = await FirebaseFirestore.instance
+                          .collection('ClassGroups')
+                          .doc(selectedClassId)
+                          .get();
+                      final className = classDoc.data()?['name'] ?? 'this class';
+                      
+                      setDialogState(() => errorMsg = 
+                        '$className already has a schedule with ${classConflict['instructorName']}\n'
+                        'on ${_days[selectedDay]} from ${conflictStart.format(context)} to ${conflictEnd.format(context)}\n'
+                        'in Room ${classConflict['room']}');
+                      return;
+                    }
                   }
 
 

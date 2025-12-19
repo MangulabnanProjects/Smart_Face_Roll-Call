@@ -58,20 +58,29 @@ def detect():
     
     detected = False
     labeled_image_base64 = ""
+    detected_identities = []  # NEW: List of detected student identities
 
     if len(results[0].boxes) > 0:
         detected = True
         # Plot on ORIGINAL image for natural colors
         annotated_image = results[0].plot()
         
+        # Extract detected identities from class names
+        for box in results[0].boxes:
+            class_id = int(box.cls[0])
+            identity = model.names[class_id]  # Get the class name (e.g., "nix", "jc", "mc")
+            detected_identities.append(identity)
+        
         # Convert to Base64
         _, buffer = cv2.imencode('.jpg', annotated_image)
         labeled_image_base64 = base64.b64encode(buffer).decode('utf-8')
 
     print(f"[✓] Total request time: {time.time() - start_time:.2f}s")
+    print(f"[✓] Detected identities: {detected_identities}")
     return jsonify({
         'detected': detected,
-        'labeled_image': labeled_image_base64
+        'labeled_image': labeled_image_base64,
+        'detected_identities': detected_identities  # NEW: Return list of identities
     })
 
 if __name__ == '__main__':

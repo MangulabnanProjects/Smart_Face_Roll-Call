@@ -22,20 +22,52 @@ class StudentService {
   }
 
   // Get students by class ID as a stream
-  // Note: Sorting client-side to avoid Firestore index requirement
-  Stream<List<Student>> getStudentsByClass(String classId) {
-    return _studentCollection
-      .where('classId', isEqualTo: classId)
-      .snapshots()
-      .map((snapshot) {
-        final students = snapshot.docs.map((doc) {
-          return Student.fromMap(doc.data() as Map<String, dynamic>, doc.id);
-        }).toList();
-        
-        // Sort client-side by fullName
-        students.sort((a, b) => a.fullName.compareTo(b.fullName));
-        return students;
-      });
+  // Modified to match by class NAME so students appear for all instructors teaching the same class
+  Stream<List<Student>> getStudentsByClass(String classId) async* {
+    // First, get the class name for this classId
+    final classDoc = await FirebaseFirestore.instance
+        .collection('ClassGroups')
+        .doc(classId)
+        .get();
+    
+    if (!classDoc.exists) {
+      yield [];
+      return;
+    }
+    
+    final className = (classDoc.data() as Map<String, dynamic>)['name'] as String? ?? '';
+    
+    if (className.isEmpty) {
+      yield [];
+      return;
+    }
+    
+    // Get all class groups with the same name
+    final classGroupsSnapshot = await FirebaseFirestore.instance
+        .collection('ClassGroups')
+        .where('name', isEqualTo: className)
+        .get();
+    
+    final classIds = classGroupsSnapshot.docs.map((doc) => doc.id).toList();
+    
+    if (classIds.isEmpty) {
+      yield [];
+      return;
+    }
+    
+    // Now stream students who have any of these classIds
+    await for (var snapshot in _studentCollection.snapshots()) {
+      final students = snapshot.docs
+          .map((doc) {
+            return Student.fromMap(doc.data() as Map<String, dynamic>, doc.id);
+          })
+          .where((student) => classIds.contains(student.classId))
+          .toList();
+      
+      // Sort client-side by fullName
+      students.sort((a, b) => a.fullName.compareTo(b.fullName));
+      yield students;
+    }
   }
 
   // Delete a student

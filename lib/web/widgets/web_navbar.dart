@@ -1,9 +1,54 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 /// Web navbar widget for the dashboard
-class WebNavbar extends StatelessWidget {
+class WebNavbar extends StatefulWidget {
   const WebNavbar({super.key});
+
+  @override
+  State<WebNavbar> createState() => _WebNavbarState();
+}
+
+class _WebNavbarState extends State<WebNavbar> {
+  String _displayName = 'Instructor';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadInstructorName();
+  }
+
+  Future<void> _loadInstructorName() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('Instructor_Information')
+          .doc(user.uid)
+          .get();
+
+      if (doc.exists) {
+        final data = doc.data();
+        final lastName = data?['Last_Name'] ?? '';
+        final firstName = data?['First_Name'] ?? '';
+        
+        if (lastName.isNotEmpty && firstName.isNotEmpty) {
+          setState(() {
+            _displayName = '$lastName, $firstName';
+          });
+        } else if (data?['Full_Name'] != null) {
+          // Fallback for old data without separate fields
+          setState(() {
+            _displayName = data!['Full_Name'];
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Error loading instructor name: $e');
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -40,8 +85,7 @@ class WebNavbar extends StatelessWidget {
                 const Icon(Icons.person),
                 const SizedBox(width: 8),
                 Text(
-                   // Get display name or default to 'Instructor'
-                   FirebaseAuth.instance.currentUser?.displayName ?? 'Instructor',
+                   _displayName,
                    style: const TextStyle(fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(width: 8),

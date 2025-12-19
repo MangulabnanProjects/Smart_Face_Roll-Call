@@ -16,7 +16,8 @@ class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
-  final _nameController = TextEditingController();
+  final _firstNameController = TextEditingController();
+  final _lastNameController = TextEditingController();
   final _authService = AuthService();
   final _imagePicker = ImagePicker();
   final _instructorCodeController = TextEditingController();
@@ -34,7 +35,8 @@ class _LoginScreenState extends State<LoginScreen> {
   void dispose() {
     _emailController.dispose();
     _passwordController.dispose();
-    _nameController.dispose();
+    _firstNameController.dispose();
+    _lastNameController.dispose();
     _instructorCodeController.dispose();
     super.dispose();
   }
@@ -58,7 +60,8 @@ class _LoginScreenState extends State<LoginScreen> {
         _selectedImage = null;
         _emailController.clear();
         _passwordController.clear();
-        _nameController.clear();
+        _firstNameController.clear();
+        _lastNameController.clear();
         _instructorCodeController.clear();
       });
       return;
@@ -98,7 +101,7 @@ class _LoginScreenState extends State<LoginScreen> {
         // Sign up Flow
         await Future.delayed(const Duration(seconds: 2)); 
         final random = Random();
-        final code = '2025-${1000 + random.nextInt(9000)}';
+        final code = '2026-${1000 + random.nextInt(9000)}';
         
         setState(() {
           _generatedInstructorCode = code;
@@ -109,7 +112,8 @@ class _LoginScreenState extends State<LoginScreen> {
         await _authService.signUp(
           email: _emailController.text.trim(),
           password: _passwordController.text,
-          name: _nameController.text.trim(),
+          firstName: _firstNameController.text.trim(),
+          lastName: _lastNameController.text.trim(),
           instructorCode: code,
         );
       }
@@ -223,9 +227,25 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
             ),
             const SizedBox(height: 24),
+            // First Name Field
             TextFormField(
-              controller: _nameController,
-              decoration: const InputDecoration(labelText: 'Full Name', border: OutlineInputBorder(), prefixIcon: Icon(Icons.person)),
+              controller: _firstNameController,
+              decoration: const InputDecoration(
+                labelText: 'First Name',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.person),
+              ),
+              validator: (v) => v!.isEmpty ? 'Required' : null,
+            ),
+            const SizedBox(height: 16),
+            // Last Name Field
+            TextFormField(
+              controller: _lastNameController,
+              decoration: const InputDecoration(
+                labelText: 'Last Name',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.person_outline),
+              ),
               validator: (v) => v!.isEmpty ? 'Required' : null,
             ),
             const SizedBox(height: 16),
@@ -248,7 +268,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 controller: _instructorCodeController,
                 decoration: const InputDecoration(
                   labelText: 'Instructor ID',
-                  hintText: 'e.g. 2025-XXXX',
+                  hintText: 'e.g. 2026-XXXX',
                   border: OutlineInputBorder(),
                   prefixIcon: Icon(Icons.badge),
                 ),

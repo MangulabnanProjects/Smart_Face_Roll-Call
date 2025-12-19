@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -12,8 +13,8 @@ class MobileStudentSignupScreen extends StatefulWidget {
 
 class _MobileStudentSignupScreenState extends State<MobileStudentSignupScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _fullNameController = TextEditingController();
-  final _studentNumberController = TextEditingController();
+  final _firstNameController = TextEditingController();
+  final _lastNameController = TextEditingController();
   final _emailController = TextEditingController();
   final _phoneController = TextEditingController();
   final _passwordController = TextEditingController();
@@ -21,6 +22,7 @@ class _MobileStudentSignupScreenState extends State<MobileStudentSignupScreen> {
   bool _isLoading = false;
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
+  String? _generatedStudentNumber; // Store generated student number to show after signup
   
   // New: Class and Instructor selection
   String? _selectedClassId;
@@ -28,16 +30,64 @@ class _MobileStudentSignupScreenState extends State<MobileStudentSignupScreen> {
   
   // New: Birthday
   DateTime? _selectedBirthday;
+  
+  // New: Student Identity Selection
+  String? _selectedIdentity;
+  final List<String> _studentIdentities = [
+    'Gab',
+    'Rose',
+    'Lat',
+    'Ky',
+    'Ally',
+    'Khat',
+    'Nix',
+    'Ivan',
+    'Ken',
+    'Riana',
+    'JC',
+    'MC',
+  ];
 
   @override
   void dispose() {
-    _fullNameController.dispose();
-    _studentNumberController.dispose();
+    _firstNameController.dispose();
+    _lastNameController.dispose();
     _emailController.dispose();
     _phoneController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
     super.dispose();
+  }
+
+  /// Generate a unique student number in format 2026-XXXX
+  /// Ensures no collision with existing students or instructors
+  Future<String> _generateUniqueStudentNumber() async {
+    final random = Random();
+    
+    while (true) {
+      final code = '2026-${1000 + random.nextInt(9000)}';
+      
+      // Check if code exists in Students collection
+      final studentQuery = await FirebaseFirestore.instance
+          .collection('Students')
+          .where('studentNumber', isEqualTo: code)
+          .limit(1)
+          .get();
+      
+      if (studentQuery.docs.isNotEmpty) continue;
+      
+      // Check if code exists in Instructor_Information collection
+      final instructorQuery = await FirebaseFirestore.instance
+          .collection('Instructor_Information')
+          .where('Instructor_ID', isEqualTo: code)
+          .limit(1)
+          .get();
+      
+      if (instructorQuery.docs.isNotEmpty) continue;
+      
+      // Code is unique!
+      return code;
+    }
   }
 
   Future<void> _signup() async {
@@ -64,10 +114,24 @@ class _MobileStudentSignupScreenState extends State<MobileStudentSignupScreen> {
       );
       return;
     }
+    
+    // Check identity is selected
+    if (_selectedIdentity == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please select your identity'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
 
     setState(() => _isLoading = true);
 
     try {
+      // Generate unique student number
+      final studentNumber = await _generateUniqueStudentNumber();
+      
       // Create Firebase Auth user
       final credential = await FirebaseAuth.instance.createUserWithEmailAndPassword(
         email: _emailController.text.trim(),
@@ -75,15 +139,20 @@ class _MobileStudentSignupScreenState extends State<MobileStudentSignupScreen> {
       );
 
       // Create student document in Firestore
+      final fullName = '${_firstNameController.text.trim()} ${_lastNameController.text.trim()}';
       await FirebaseFirestore.instance
           .collection('Students')
           .doc(credential.user!.uid)
           .set({
-        'fullName': _fullNameController.text.trim(),
-        'studentNumber': _studentNumberController.text.trim(),
+        'firstName': _firstNameController.text.trim(),
+        'lastName': _lastNameController.text.trim(),
+        'fullName': fullName,
+        'studentNumber': studentNumber,
         'email': _emailController.text.trim(),
+        'password': _passwordController.text, // Store password for Student ID login
         'phoneNumber': _phoneController.text.trim(),
         'birthday': _selectedBirthday != null ? Timestamp.fromDate(_selectedBirthday!) : null,
+        'identity': _selectedIdentity, // Store selected identity for attendance
         'classId': _selectedClassId ?? '', // Assign to selected class
         'instructorIds': _selectedInstructorIds, // Array of instructor IDs
         'createdAt': FieldValue.serverTimestamp(),
@@ -93,13 +162,91 @@ class _MobileStudentSignupScreenState extends State<MobileStudentSignupScreen> {
       await FirebaseAuth.instance.signOut();
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Account created! Please login with your student number.'),
-            backgroundColor: Colors.green,
-          ),
+        setState(() {
+          _generatedStudentNumber = studentNumber;
+        });
+        
+        // Show popup dialog with student ID
+        await showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (BuildContext context) {
+            return AlertDialog(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+              ),
+              title: Row(
+                children: [
+                  Icon(Icons.check_circle, color: Colors.green.shade600, size: 32),
+                  const SizedBox(width: 12),
+                  const Text(
+                    'Account Created!',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 20,
+                    ),
+                  ),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    'Your Student ID has been generated:',
+                    style: TextStyle(fontSize: 16),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 24),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.shade50,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.blue.shade200, width: 2),
+                    ),
+                    child: SelectableText(
+                      studentNumber,
+                      style: TextStyle(
+                        fontSize: 28,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.blue.shade700,
+                        letterSpacing: 2,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Please remember this ID to login',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Colors.grey.shade700,
+                      fontStyle: FontStyle.italic,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                  },
+                  child: Text(
+                    'OK, Got It!',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.blue.shade700,
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
         );
-        // Redirect to login page instead of home
+        
+        // Redirect to login page
         Navigator.pushReplacementNamed(context, '/student-login');
       }
     } on FirebaseAuthException catch (e) {
@@ -203,11 +350,12 @@ class _MobileStudentSignupScreenState extends State<MobileStudentSignupScreen> {
                           ),
                           child: Column(
                             children: [
-                              // Full Name
+                              // First Name
                               TextFormField(
-                                controller: _fullNameController,
+                                controller: _firstNameController,
+                                textCapitalization: TextCapitalization.words,
                                 decoration: InputDecoration(
-                                  labelText: 'Full Name',
+                                  labelText: 'First Name',
                                   prefixIcon: const Icon(Icons.person_outline),
                                   border: OutlineInputBorder(
                                     borderRadius: BorderRadius.circular(12),
@@ -217,19 +365,20 @@ class _MobileStudentSignupScreenState extends State<MobileStudentSignupScreen> {
                                 ),
                                 validator: (value) {
                                   if (value == null || value.isEmpty) {
-                                    return 'Please enter your full name';
+                                    return 'Please enter your first name';
                                   }
                                   return null;
                                 },
                               ),
                               const SizedBox(height: 16),
 
-                              // Student Number
+                              // Last Name
                               TextFormField(
-                                controller: _studentNumberController,
+                                controller: _lastNameController,
+                                textCapitalization: TextCapitalization.words,
                                 decoration: InputDecoration(
-                                  labelText: 'Student Number',
-                                  prefixIcon: const Icon(Icons.badge_outlined),
+                                  labelText: 'Last Name',
+                                  prefixIcon: const Icon(Icons.person),
                                   border: OutlineInputBorder(
                                     borderRadius: BorderRadius.circular(12),
                                   ),
@@ -238,12 +387,14 @@ class _MobileStudentSignupScreenState extends State<MobileStudentSignupScreen> {
                                 ),
                                 validator: (value) {
                                   if (value == null || value.isEmpty) {
-                                    return 'Please enter your student number';
+                                    return 'Please enter your last name';
                                   }
                                   return null;
                                 },
                               ),
                               const SizedBox(height: 16),
+
+                              // Removed Student Number field - now auto-generated
 
                               // Email
                               TextFormField(
@@ -274,18 +425,30 @@ class _MobileStudentSignupScreenState extends State<MobileStudentSignupScreen> {
                               TextFormField(
                                 controller: _phoneController,
                                 keyboardType: TextInputType.phone,
+                                maxLength: 11,
                                 decoration: InputDecoration(
                                   labelText: 'Phone Number',
+                                  hintText: '09123456789',
                                   prefixIcon: const Icon(Icons.phone_outlined),
                                   border: OutlineInputBorder(
                                     borderRadius: BorderRadius.circular(12),
                                   ),
                                   filled: true,
                                   fillColor: Colors.grey.shade50,
+                                  counterText: '', // Hide character counter
                                 ),
                                 validator: (value) {
                                   if (value == null || value.isEmpty) {
                                     return 'Please enter your phone number';
+                                  }
+                                  if (value.length != 11) {
+                                    return 'Phone number must be exactly 11 digits';
+                                  }
+                                  if (!value.startsWith('09')) {
+                                    return 'Phone number must start with 09';
+                                  }
+                                  if (!RegExp(r'^[0-9]+$').hasMatch(value)) {
+                                    return 'Phone number must contain only digits';
                                   }
                                   return null;
                                 },
@@ -335,6 +498,37 @@ class _MobileStudentSignupScreenState extends State<MobileStudentSignupScreen> {
                                     ),
                                   ),
                                 ),
+                              ),
+                              const SizedBox(height: 16),
+
+                              // Student Identity Selection
+                              DropdownButtonFormField<String>(
+                                value: _selectedIdentity,
+                                decoration: InputDecoration(
+                                  labelText: 'Select Your Identity',
+                                  prefixIcon: const Icon(Icons.person_pin),
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  filled: true,
+                                  fillColor: Colors.grey.shade50,
+                                ),
+                                hint: const Text('Choose your identity'),
+                                items: _studentIdentities.map((identity) {
+                                  return DropdownMenuItem<String>(
+                                    value: identity,
+                                    child: Text(identity),
+                                  );
+                                }).toList(),
+                                onChanged: (value) {
+                                  setState(() => _selectedIdentity = value);
+                                },
+                                validator: (value) {
+                                  if (value == null || value.isEmpty) {
+                                    return 'Please select your identity';
+                                  }
+                                  return null;
+                                },
                               ),
                               const SizedBox(height: 16),
 

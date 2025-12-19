@@ -137,7 +137,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
           const Divider(),
           
           // Menu items
-          _buildMenuItem(Icons.photo_library, 'My Photos', '0 images', () {}),
           _buildMenuItem(Icons.cloud_upload, 'Server Settings', 'Configure IP', () async {
              final currentUrl = await ApiService.getBaseUrl();
              final controller = TextEditingController(text: currentUrl);
@@ -180,7 +179,66 @@ class _ProfileScreenState extends State<ProfileScreen> {
                );
              }
           }),
-          _buildMenuItem(Icons.face, 'AI Model Status', 'Ready for integration', () {}),
+          _buildMenuItem(Icons.face, 'AI Model Status', 'bestyolov11.pt Integrated', () {
+            showDialog(
+              context: context,
+              builder: (context) => AlertDialog(
+                title: const Text('AI Model Information'),
+                content: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Model:',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                      ),
+                      const SizedBox(height: 4),
+                      const Text('YOLOv11 - Best Face Recognition Model'),
+                      const Text('File: bestyolov11.pt'),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'Trained Students:',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                      ),
+                      const SizedBox(height: 8),
+                      _buildStudentChip('gab'),
+                      _buildStudentChip('rose'),
+                      _buildStudentChip('lat'),
+                      _buildStudentChip('ky'),
+                      _buildStudentChip('ally'),
+                      _buildStudentChip('khat'),
+                      _buildStudentChip('nix'),
+                      _buildStudentChip('ivan'),
+                      _buildStudentChip('ken'),
+                      _buildStudentChip('riana'),
+                      _buildStudentChip('jc'),
+                      _buildStudentChip('mc'),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'Status:',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          Icon(Icons.check_circle, color: Colors.green, size: 20),
+                          const SizedBox(width: 8),
+                          const Text('Model Loaded and Ready'),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Close'),
+                  ),
+                ],
+              ),
+            );
+          }),
           _buildMenuItem(Icons.info_outline, 'About', 'Version 1.0.0', () {}),
           
           const Divider(),
@@ -198,6 +256,34 @@ class _ProfileScreenState extends State<ProfileScreen> {
       subtitle: subtitle.isNotEmpty ? Text(subtitle) : null,
       onTap: onTap,
       trailing: const Icon(Icons.chevron_right),
+    );
+  }
+
+  Widget _buildStudentChip(String name) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8.0),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.blue.shade50,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: Colors.blue.shade200),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.person, size: 16, color: Colors.blue.shade700),
+            const SizedBox(width: 6),
+            Text(
+              name,
+              style: TextStyle(
+                color: Colors.blue.shade700,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

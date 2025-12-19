@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:io';
 import '../../shared/services/image_service.dart';
+import '../../shared/services/attendance_service.dart'; // NEW
 
 /// Enhanced gallery with date filtering and user-specific images
 class GalleryScreen extends StatefulWidget {
@@ -300,6 +301,9 @@ class _GalleryScreenState extends State<GalleryScreen> {
                                 final dcimPath = '/storage/emulated/0/DCIM/SmartAttendance/$fileName';
 
                                 // 2. Delete from User Gallery (Private)
+                                // NEW: Delete associated attendance records first
+                                await AttendanceService().deleteAttendanceBySourceImage(fileName);
+
                                 await file.delete();
                                 if (await labeledFile.exists()) {
                                   await labeledFile.delete();

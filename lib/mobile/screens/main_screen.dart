@@ -9,6 +9,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:gal/gal.dart';
 import '../../shared/services/image_service.dart';
 import '../../shared/services/api_service.dart';
+import '../../shared/services/schedule_service.dart';
+import '../../shared/services/attendance_service.dart';
 import 'gallery_screen.dart';
 import 'home_screen.dart';
 import 'profile_screen.dart';
@@ -198,6 +200,59 @@ class _MobileMainScreenState extends State<MobileMainScreen> {
   Future<void> _saveImageToLocations(File sourceFile) async {
     try {
       final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Please log in first')),
+          );
+        }
+        return;
+      }
+
+      // GET STUDENT INFO
+      final studentDoc = await FirebaseFirestore.instance
+          .collection('Students')
+          .doc(user.uid)
+          .get();
+
+      if (!studentDoc.exists) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Student profile not found')),
+          );
+        }
+        return;
+      }
+
+      final studentData = studentDoc.data()!;
+      final studentName = studentData['fullName'] ?? '';
+      final classId = studentData['classId'] ?? '';
+
+      // CHECK CLASS SCHEDULE (Time Restriction)
+      if (classId.isNotEmpty) {
+        final isAllowed = ScheduleService.isCameraAllowed(classId);
+        if (!isAllowed) {
+          if (mounted) {
+            showDialog(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                title: const Text('Outside Class Hours'),
+                content: const Text(
+                  'Attendance photos can only be taken during your scheduled class time.'
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: const Text('OK'),
+                  ),
+                ],
+              ),
+            );
+          }
+          return; // REJECT PHOTO
+        }
+      }
+
       final directory = await getApplicationDocumentsDirectory();
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       final fileName = 'Attendance_$timestamp.jpg';
@@ -249,7 +304,47 @@ class _MobileMainScreenState extends State<MobileMainScreen> {
          return; // STOP SAVING
       }
 
-      // --- IF DETECTED, PROCEED TO SAVE ---
+      // --- IF DETECTED, RECORD ATTENDANCE FOR ALL STUDENTS ---
+      Map<String, bool> attendanceResults = {};
+      if (classId.isNotEmpty) {
+        try {
+          final attendanceService = AttendanceService();
+          
+          // Get detected identities from result
+          final detectedIdentities = result['detected_identities'] != null
+              ? List<String>.from(result['detected_identities'])
+              : <String>[];
+
+          if (detectedIdentities.isNotEmpty) {
+            // Get current schedule information
+            final scheduleInfo = await _getCurrentScheduleInfo(classId);
+            
+            // Use the classId from the SCHEDULE (not from student profile)
+            final correctClassId = scheduleInfo['classId'] ?? classId;
+            debugPrint('ATTENDANCE: Using classId from schedule: $correctClassId');
+            
+            // Record attendance for all detected students
+            attendanceResults = await attendanceService.recordAttendanceForDetectedStudents(
+              detectedIdentities: detectedIdentities,
+              classId: correctClassId, // Use schedule's classId
+              scheduleId: scheduleInfo['scheduleId'],
+              scheduleTitle: scheduleInfo['scheduleTitle'],
+              instructorId: scheduleInfo['instructorId'],
+              instructorName: scheduleInfo['instructorName'],
+              className: scheduleInfo['className'],
+            );
+            
+            debugPrint('Attendance results: $attendanceResults');
+          } else {
+            debugPrint('No identities detected in image');
+          }
+        } catch (e) {
+          debugPrint('Error recording attendance: $e');
+          // Continue with image saving even if attendance fails
+        }
+      }
+
+      // --- PROCEED TO SAVE IMAGE ---
 
       // 1. Phone Gallery (Public) - ORIGINAL ONLY
       // Use Gal to ensure it shows up in Recents/Gallery app immediately
@@ -276,16 +371,14 @@ class _MobileMainScreenState extends State<MobileMainScreen> {
       }
 
       // 2. User Gallery (Private) - BOTH
-      if (user != null) {
-        final userDir = Directory('${directory.path}/images/${user.uid}');
-        if (!await userDir.exists()) {
-          await userDir.create(recursive: true);
-        }
-        await sourceFile.copy('${userDir.path}/$fileName');
-        if (labeledFile != null) {
-           final labeledName = fileName.replaceAll('.jpg', '_labeled.jpg');
-           await labeledFile.copy('${userDir.path}/$labeledName');
-        }
+      final userDir = Directory('${directory.path}/images/${user.uid}');
+      if (!await userDir.exists()) {
+        await userDir.create(recursive: true);
+      }
+      await sourceFile.copy('${userDir.path}/$fileName');
+      if (labeledFile != null) {
+         final labeledName = fileName.replaceAll('.jpg', '_labeled.jpg');
+         await labeledFile.copy('${userDir.path}/$labeledName');
       }
 
       // 3. Shared/Recents (Global) - BOTH
@@ -303,14 +396,14 @@ class _MobileMainScreenState extends State<MobileMainScreen> {
       ImageService().notifyImageSaved();
 
       if (mounted) {
-        // Show custom centered popup (Toast replacement)
+        // Show custom centered popup with attendance confirmation
         showDialog(
           context: context,
           barrierColor: Colors.black12, // Subtle dim
           barrierDismissible: false,
           builder: (context) {
-            // Auto close after 1.5 seconds
-            Future.delayed(const Duration(milliseconds: 1500), () {
+            // Auto close after 2 seconds
+            Future.delayed(const Duration(milliseconds: 2000), () {
               if (context.mounted) Navigator.of(context).pop();
             });
 
@@ -323,15 +416,34 @@ class _MobileMainScreenState extends State<MobileMainScreen> {
                     color: Colors.black87,
                     borderRadius: BorderRadius.circular(30),
                   ),
-                  child: const Row(
+                  child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.face, color: Colors.blueAccent),
-                      SizedBox(width: 12),
-                      Text(
-                        'Face Verified & Saved',
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                      const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.face, color: Colors.blueAccent),
+                          SizedBox(width: 12),
+                          Text(
+                            'Face Verified & Saved',
+                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                          ),
+                        ],
                       ),
+                      if (attendanceResults.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.check_circle, color: Colors.green, size: 16),
+                            SizedBox(width: 8),
+                            Text(
+                              'Attendance Recorded',
+                              style: TextStyle(color: Colors.white70, fontSize: 12),
+                            ),
+                          ],
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -453,5 +565,74 @@ class _MobileMainScreenState extends State<MobileMainScreen> {
         ],
       ),
     );
+  }
+
+  /// Get current schedule information for attendance recording
+  /// GLOBAL LOOKUP - finds schedules based on TIME, not student's profile classId
+  Future<Map<String, String?>> _getCurrentScheduleInfo(String classId) async {
+    try {
+      final now = DateTime.now();
+      final currentDay = now.weekday - 1; // Mon=0
+      final currentMinutes = now.hour * 60 + now.minute;
+
+      // Query ALL schedules for today (not filtered by class)
+      // This ensures we find the correct schedule regardless of student's profile classId
+      debugPrint('SCHEDULE LOOKUP: Searching for schedules on day $currentDay at $currentMinutes minutes');
+      final scheduleQuery = await FirebaseFirestore.instance
+          .collection('Schedules')
+          .where('dayIndex', isEqualTo: currentDay)
+          .get();
+
+      debugPrint('SCHEDULE LOOKUP: Found ${scheduleQuery.docs.length} schedules for today');
+
+      // Find the schedule that matches current time
+      for (var doc in scheduleQuery.docs) {
+        final data = doc.data();
+        final startHour = data['startHour'] as int? ?? 0;
+        final startMinute = data['startMinute'] as int? ?? 0;
+        final endHour = data['endHour'] as int? ?? 0;
+        final endMinute = data['endMinute'] as int? ?? 0;
+
+        final startMinutes = startHour * 60 + startMinute;
+        final endMinutes = endHour * 60 + endMinute;
+
+        // Check if current time is within this schedule
+        if (currentMinutes >= startMinutes && currentMinutes <= endMinutes) {
+          final scheduleClassId = data['classId'] as String? ?? '';
+          debugPrint('SCHEDULE MATCH: Found schedule "${data['title']}" for class $scheduleClassId');
+          debugPrint('SCHEDULE MATCH: Instructor ${data['instructorName']} (${data['instructorId']})');
+          
+          return {
+            'scheduleId': doc.id,
+            'scheduleTitle': data['title'] as String? ?? '',
+            'instructorId': data['instructorId'] as String? ?? '',
+            'instructorName': data['instructorName'] as String? ?? '',
+            'className': data['className'] as String?,
+            'classId': scheduleClassId, // Use the class ID from the SCHEDULE, not student profile
+          };
+        }
+      }
+
+      debugPrint('SCHEDULE LOOKUP: No matching schedule found for current time');
+      // No matching schedule found
+      return {
+        'scheduleId': null,
+        'scheduleTitle': null,
+        'instructorId': null,
+        'instructorName': null,
+        'className': null,
+        'classId': null,
+      };
+    } catch (e) {
+      debugPrint('Error getting schedule info: $e');
+      return {
+        'scheduleId': null,
+        'scheduleTitle': null,
+        'instructorId': null,
+        'instructorName': null,
+        'className': null,
+        'classId': null,
+      };
+    }
   }
 }
